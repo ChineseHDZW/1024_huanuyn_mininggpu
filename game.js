@@ -112,35 +112,90 @@
   });
   window.addEventListener('mouseup', () => { mouse.down = false; });
 
+  // ---------------- 触控（移动端） ----------------
+  const touch = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0, dx: 0, dy: 0, mag: 0 };
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    initAudio();
+    const t = e.changedTouches[0];
+    const p = toLogical(t.clientX, t.clientY);
+    if (G.state !== 'playing') {
+      game.click(p.x, p.y);
+      return;
+    }
+    touch.active = true;
+    touch.id = t.identifier;
+    touch.ox = p.x; touch.oy = p.y;
+    touch.x = p.x; touch.y = p.y;
+    touch.dx = 0; touch.dy = 0; touch.mag = 0;
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier !== touch.id) continue;
+      const p = toLogical(t.clientX, t.clientY);
+      touch.x = p.x; touch.y = p.y;
+      const dx = p.x - touch.ox, dy = p.y - touch.oy;
+      const len = Math.hypot(dx, dy);
+      const dead = 12;
+      if (len <= dead) { touch.dx = 0; touch.dy = 0; touch.mag = 0; }
+      else {
+        touch.mag = Math.min(1, (len - dead) / 64);
+        touch.dx = dx / len;
+        touch.dy = dy / len;
+      }
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === touch.id) {
+        touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
+      }
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', () => {
+    touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
+  }, { passive: false });
+
   // ---------------- 数据表 ----------------
   // CPU：决定普攻的射速、伤害、弹道数
   const CPUS = [
-    { name: '赛扬 G5905',       tag: '亮机专用',       dmg: 12, interval: 0.34, count: 1, pierce: 0, spread: 0,    cost: 0 },
-    { name: '奔腾 G6400',       tag: '办公够用',       dmg: 15, interval: 0.30, count: 1, pierce: 0, spread: 0,    cost: 60 },
-    { name: '酷睿 i5-12400',    tag: '平民六核',       dmg: 20, interval: 0.26, count: 1, pierce: 1, spread: 0,    cost: 140 },
-    { name: '酷睿 i7-13700K',   tag: '能上高频',       dmg: 25, interval: 0.21, count: 1, pierce: 1, spread: 0,    cost: 260 },
-    { name: '酷睿 i9-14900K',   tag: '电压拉满',       dmg: 22, interval: 0.20, count: 2, pierce: 1, spread: 0.10, cost: 420 },
-    { name: '线程撕裂者 7995WX', tag: '核心数就是正义', dmg: 24, interval: 0.16, count: 3, pierce: 2, spread: 0.14, cost: 700 },
+    { name: '赛扬 G5905',       tag: '亮机专用',       dmg: 12, interval: 0.34,  count: 1, pierce: 0, spread: 0,    cost: 0 },
+    { name: '奔腾 G6400',       tag: '办公够用',       dmg: 15, interval: 0.30,  count: 1, pierce: 0, spread: 0,    cost: 55 },
+    { name: '酷睿 i3-12100',    tag: '四核起步',       dmg: 18, interval: 0.27,  count: 1, pierce: 1, spread: 0,    cost: 120 },
+    { name: '酷睿 i5-12400',    tag: '平民六核',       dmg: 22, interval: 0.24,  count: 1, pierce: 1, spread: 0,    cost: 220 },
+    { name: '酷睿 i7-13700K',   tag: '能上高频',       dmg: 27, interval: 0.20,  count: 1, pierce: 1, spread: 0,    cost: 380 },
+    { name: '酷睿 i9-14900K',   tag: '电压拉满',       dmg: 24, interval: 0.185, count: 2, pierce: 1, spread: 0.10, cost: 600 },
+    { name: '线程撕裂者 7995WX', tag: '核心数就是正义', dmg: 27, interval: 0.15,  count: 3, pierce: 2, spread: 0.14, cost: 900 },
+    { name: '至强 Platinum 8380', tag: '服务器退役',    dmg: 30, interval: 0.125, count: 4, pierce: 2, spread: 0.16, cost: 1400 },
   ];
 
   // 显卡：决定技能
   const GPUS = [
     { name: '核显 UHD 630', tag: '能亮就算赢',         skill: null,      mana: 0,   cd: 0,    cost: 0,    color: '#6b7a90' },
-    { name: 'RX 580 8G',    tag: '无敌矿渣，战未来',   skill: 'storm',   mana: 30,  cd: 5.0,  cost: 100,  color: '#ff5a5a' },
-    { name: 'GTX 1080 Ti',  tag: '一代神卡，死不退休', skill: 'laser',   mana: 35,  cd: 4.5,  cost: 220,  color: '#7dff9b' },
-    { name: 'RTX 3080',     tag: '传奇矿场老将',       skill: 'boost',   mana: 40,  cd: 6.0,  cost: 380,  color: '#ffd166' },
-    { name: 'RTX 4090',     tag: '别叫它显卡，叫灭火器', skill: 'flame',  mana: 60,  cd: 8.0,  cost: 600,  color: '#ff8a3d' },
-    { name: 'RTX 5050',     tag: '老黄刀法精准',       skill: 'precise', mana: 45,  cd: 5.0,  cost: 900,  color: '#9b8cff' },
-    { name: 'GTX 690',      tag: '战术核显卡',         skill: 'nuke',    mana: 100, cd: 20.0, cost: 1600, color: '#ff3df0' },
+    { name: 'RX 580 8G',    tag: '无敌矿渣，战未来',   skill: 'storm',   mana: 30,  cd: 5.0,  cost: 90,   color: '#ff5a5a' },
+    { name: 'GTX 1080 Ti',  tag: '一代神卡，死不退休', skill: 'laser',   mana: 35,  cd: 4.5,  cost: 190,  color: '#7dff9b' },
+    { name: 'RTX 3060 12G', tag: '平民之光，显存管够', skill: 'storm',   mana: 36,  cd: 4.6,  cost: 320,  color: '#9fe0ff' },
+    { name: 'RTX 3080',     tag: '传奇矿场老将',       skill: 'boost',   mana: 40,  cd: 6.0,  cost: 480,  color: '#ffd166' },
+    { name: 'RTX 4070',     tag: '能效比刺客',         skill: 'precise', mana: 42,  cd: 5.2,  cost: 680,  color: '#a5ffb0' },
+    { name: 'RTX 4090',     tag: '别叫它显卡，叫灭火器', skill: 'flame',  mana: 60,  cd: 8.0,  cost: 950,  color: '#ff8a3d' },
+    { name: 'RTX 5050',     tag: '老黄刀法精准',       skill: 'laser',   mana: 50,  cd: 3.8,  cost: 1300, color: '#9b8cff' },
+    { name: 'GTX 690',      tag: '战术核显卡',         skill: 'nuke',    mana: 100, cd: 20.0, cost: 2000, color: '#ff3df0' },
   ];
 
   // 内存：蓝上限与回蓝
   const RAMS = [
     { name: 'DDR4 8G 2666',   maxMana: 100, regen: 7,  cost: 0 },
-    { name: 'DDR4 16G 3200',  maxMana: 145, regen: 10, cost: 70 },
-    { name: 'DDR5 32G 6000',  maxMana: 200, regen: 14, cost: 150 },
-    { name: 'DDR5 64G 7200',  maxMana: 265, regen: 19, cost: 280 },
-    { name: 'DDR5 128G ECC',  maxMana: 340, regen: 26, cost: 480 },
+    { name: 'DDR4 16G 3200',  maxMana: 145, regen: 10, cost: 65 },
+    { name: 'DDR4 32G 3600',  maxMana: 175, regen: 12, cost: 140 },
+    { name: 'DDR5 32G 6000',  maxMana: 210, regen: 15, cost: 250 },
+    { name: 'DDR5 64G 7200',  maxMana: 270, regen: 19, cost: 420 },
+    { name: 'DDR5 128G ECC',  maxMana: 340, regen: 24, cost: 650 },
+    { name: 'DDR5 256G ECC',  maxMana: 430, regen: 30, cost: 950 },
   ];
 
   const SKILL_NAMES = {
@@ -149,9 +204,9 @@
   };
 
   const ENEMY_TYPES = {
-    worm:   { hp: 16, speed: 96,  dmg: 8,  r: 17, color: '#6fe3ff', gold: 3,  score: 1 },
-    trojan: { hp: 12, speed: 152, dmg: 6,  r: 16, color: '#ff7bd5', gold: 4,  score: 1 },
-    leak:   { hp: 52, speed: 58,  dmg: 14, r: 24, color: '#a98cff', gold: 8,  score: 2 },
+    worm:   { hp: 16, speed: 96,  dmg: 8,  r: 17, color: '#6fe3ff', gold: 6,  score: 1 },
+    trojan: { hp: 12, speed: 152, dmg: 6,  r: 16, color: '#ff7bd5', gold: 8,  score: 1 },
+    leak:   { hp: 52, speed: 58,  dmg: 14, r: 24, color: '#a98cff', gold: 15, score: 2 },
     boss:   { hp: 5000, speed: 104, dmg: 22, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
@@ -174,10 +229,12 @@
   loadAsset('coin', 'assets/item_coin.png');
   loadAsset('gpu_1', 'assets/gpu_rx580.png');
   loadAsset('gpu_2', 'assets/gpu_1080ti.png');
-  loadAsset('gpu_3', 'assets/gpu_3080.png');
-  loadAsset('gpu_4', 'assets/gpu_4090.png');
-  loadAsset('gpu_5', 'assets/gpu_5050.png');
-  loadAsset('gpu_6', 'assets/gpu_690.png');
+  loadAsset('gpu_3', 'assets/gpu_3060.png');
+  loadAsset('gpu_4', 'assets/gpu_3080.png');
+  loadAsset('gpu_5', 'assets/gpu_4070.png');
+  loadAsset('gpu_6', 'assets/gpu_4090.png');
+  loadAsset('gpu_7', 'assets/gpu_5050.png');
+  loadAsset('gpu_8', 'assets/gpu_690.png');
   loadAsset('bgMenu', 'assets/bg_menu.png');
 
   // ---------------- 游戏状态 ----------------
@@ -202,8 +259,8 @@
 
     wave: 0,
     waveTime: 0,
-    WAVE_LEN: 45,
-    TOTAL_WAVES: 8,
+    WAVE_LEN: 25,
+    TOTAL_WAVES: 14,
     spawnAcc: 0,
     bossSpawned: false,
 
@@ -287,7 +344,7 @@
     const a = rnd(TAU, 0);
     const r = 520 + rnd(220, 0);
     spawnEnemy(type, G.cam.x + Math.cos(a) * r, G.cam.y + Math.sin(a) * r,
-      1 + G.wave * 0.34, 1 + G.wave * 0.10);
+      1 + G.wave * 0.28, 1 + G.wave * 0.10);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -476,10 +533,14 @@
     if (keys.KeyD || keys.ArrowRight) ix += 1;
     if (keys.KeyW || keys.ArrowUp) iy -= 1;
     if (keys.KeyS || keys.ArrowDown) iy += 1;
+    let mag = 1;
+    if (ix === 0 && iy === 0 && touch.active) {
+      ix = touch.dx; iy = touch.dy; mag = touch.mag;
+    }
     const len = Math.hypot(ix, iy) || 1;
     const spd = p.speed * G.buffs.speed;
-    p.vx += (ix / len) * spd * 14 * dt;
-    p.vy += (iy / len) * spd * 14 * dt;
+    p.vx += (ix / len) * spd * mag * 14 * dt;
+    p.vy += (iy / len) * spd * mag * 14 * dt;
     p.vx *= Math.pow(0.0004, dt);
     p.vy *= Math.pow(0.0004, dt);
     p.x += p.vx * dt;
@@ -523,7 +584,7 @@
 
     // ----- 生成敌人 -----
     if (!G.bossSpawned) {
-      const rate = 0.90 + G.wave * 0.38;
+      const rate = 0.95 + G.wave * 0.35;
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
@@ -777,25 +838,39 @@
   }
 
   // ---------------- 商店 ----------------
+  function makeCard(kind) {
+    if (kind === 'cpu' && G.cpuIdx < CPUS.length - 1) {
+      const n = CPUS[G.cpuIdx + 1];
+      return { kind, idx: G.cpuIdx + 1, cost: n.cost, title: 'CPU 升级', name: n.name, tag: n.tag };
+    }
+    if (kind === 'gpu' && G.gpuIdx < GPUS.length - 1) {
+      const n = GPUS[G.gpuIdx + 1];
+      return { kind, idx: G.gpuIdx + 1, cost: n.cost, title: '显卡换装', name: n.name, tag: n.tag };
+    }
+    if (kind === 'ram' && G.ramIdx < RAMS.length - 1) {
+      const n = RAMS[G.ramIdx + 1];
+      return { kind, idx: G.ramIdx + 1, cost: n.cost, title: '内存升级', name: n.name,
+        tag: '+' + (n.maxMana - ram().maxMana) + ' 蓝上限' };
+    }
+    return null;
+  }
+
   function openShop() {
+    const cards = [makeCard('cpu'), makeCard('gpu'), makeCard('ram')].filter(Boolean);
+    if (!cards.length) { G.state = 'playing'; return; }
     G.state = 'shop';
     G.shopChosen = false;
-    const cards = [];
-    if (G.cpuIdx < CPUS.length - 1) {
-      cards.push({ kind: 'cpu', idx: G.cpuIdx + 1, cost: CPUS[G.cpuIdx + 1].cost,
-        title: 'CPU 升级', name: CPUS[G.cpuIdx + 1].name, tag: CPUS[G.cpuIdx + 1].tag });
-    }
-    if (G.gpuIdx < GPUS.length - 1) {
-      cards.push({ kind: 'gpu', idx: G.gpuIdx + 1, cost: GPUS[G.gpuIdx + 1].cost,
-        title: '显卡换装', name: GPUS[G.gpuIdx + 1].name, tag: GPUS[G.gpuIdx + 1].tag });
-    }
-    if (G.ramIdx < RAMS.length - 1) {
-      cards.push({ kind: 'ram', idx: G.ramIdx + 1, cost: RAMS[G.ramIdx + 1].cost,
-        title: '内存升级', name: RAMS[G.ramIdx + 1].name, tag: '+' + (RAMS[G.ramIdx + 1].maxMana - ram().maxMana) + ' 蓝上限' });
-    }
-    // 随机洗牌，最多展示三张
     cards.sort(() => Math.random() - 0.5);
     G.shopCards = cards.slice(0, 3);
+  }
+
+  // 买完一件后只替换那一张，不重排整排
+  function refreshShopSlot(kind) {
+    const i = G.shopCards.findIndex((c) => c.kind === kind);
+    if (i < 0) return;
+    const next = makeCard(kind);
+    if (next) G.shopCards[i] = next;
+    else G.shopCards.splice(i, 1);
   }
 
   function buyCard(card) {
@@ -815,12 +890,11 @@
       G.player.mana += Math.max(0, G.player.maxMana - old) * 0.6;
     }
     G.shopChosen = true;
-    G.state = 'playing';
     blip(520, 0.1, 'square', 0.14, 900);
     blip(780, 0.16, 'sine', 0.1, 1200);
-    G.waveTime = 0;
     addText(G.player.x, G.player.y - 60, '装上了！', '#7dff9b', 22);
     addParticles(G.player.x, G.player.y, '#7dff9b', 20, 260, 0.6);
+    refreshShopSlot(card.kind);
   }
 
   function continueWave() {
@@ -883,6 +957,19 @@
     if (G.flash > 0) {
       ctx.fillStyle = 'rgba(255,255,255,' + clamp(G.flash, 0, 0.7) + ')';
       ctx.fillRect(0, 0, W, H);
+    }
+
+    // 竖屏提示
+    if (window.innerHeight > window.innerWidth * 1.15) {
+      ctx.fillStyle = 'rgba(3,5,12,0.92)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#8ef2ff';
+      ctx.font = 'bold 44px ' + FONT;
+      ctx.fillText('横过来玩', W / 2, H / 2 - 20);
+      ctx.font = 'bold 20px ' + FONT;
+      ctx.fillStyle = 'rgba(190,215,255,0.8)';
+      ctx.fillText('触屏：按住屏幕拖动，角色跟着走', W / 2, H / 2 + 40);
     }
   }
 
@@ -1470,6 +1557,21 @@
       ctx.beginPath(); ctx.roundRect(bx, byy, bw * clamp(boss.hp / boss.maxHp, 0, 1), 14, 5); ctx.fill();
     }
 
+    // 触控摇杆
+    if (touch.active) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(142,242,255,0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(touch.ox, touch.oy, 54, 0, TAU); ctx.stroke();
+      ctx.fillStyle = 'rgba(142,242,255,0.12)';
+      ctx.beginPath(); ctx.arc(touch.ox, touch.oy, 54, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(142,242,255,0.65)';
+      ctx.beginPath();
+      ctx.arc(touch.ox + touch.dx * touch.mag * 44, touch.oy + touch.dy * touch.mag * 44, 22, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // 连杀
     if (G.combo >= 3) {
       ctx.textAlign = 'center';
@@ -1605,7 +1707,7 @@
     ctx.beginPath(); ctx.roundRect(skX, skY, skW, skH, 10); ctx.stroke();
     ctx.fillStyle = '#cfe3ff';
     ctx.font = 'bold 17px ' + FONT;
-    ctx.fillText('先不买，继续打工', skX + skW / 2, skY + skH / 2 + 1);
+    ctx.fillText('装好，继续战斗', skX + skW / 2, skY + skH / 2 + 1);
     G.uiButtons.push({ x: skX, y: skY, w: skW, h: skH, action: continueWave });
 
     if (G.shopHintT > 0) {
