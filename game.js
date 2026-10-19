@@ -204,9 +204,9 @@
   };
 
   const ENEMY_TYPES = {
-    worm:   { hp: 16, speed: 96,  dmg: 8,  r: 17, color: '#6fe3ff', gold: 6,  score: 1 },
-    trojan: { hp: 12, speed: 152, dmg: 6,  r: 16, color: '#ff7bd5', gold: 8,  score: 1 },
-    leak:   { hp: 52, speed: 58,  dmg: 14, r: 24, color: '#a98cff', gold: 15, score: 2 },
+    worm:   { hp: 13, speed: 104, dmg: 9,  r: 17, color: '#6fe3ff', gold: 2,  score: 1 },
+    trojan: { hp: 10, speed: 165, dmg: 7,  r: 16, color: '#ff7bd5', gold: 3,  score: 1 },
+    leak:   { hp: 40, speed: 64,  dmg: 16, r: 24, color: '#a98cff', gold: 5, score: 2 },
     boss:   { hp: 5000, speed: 104, dmg: 22, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
@@ -344,7 +344,7 @@
     const a = rnd(TAU, 0);
     const r = 520 + rnd(220, 0);
     spawnEnemy(type, G.cam.x + Math.cos(a) * r, G.cam.y + Math.sin(a) * r,
-      1 + G.wave * 0.28, 1 + G.wave * 0.10);
+      1 + G.wave * 0.22, 1 + G.wave * 0.09);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -380,11 +380,12 @@
     return best;
   }
 
-  function fireBullet(x, y, angle, speed, dmg, pierce, color, r, target) {
+  function fireBullet(x, y, angle, speed, dmg, pierce, color, r, target, splash) {
     G.bullets.push({
       x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
       dmg, pierce, color: color || '#8ef2ff', r: r || 4, life: 1.1,
       hitSet: null, target: target || null, homing: target ? 7.5 : 0,
+      splash: splash === undefined ? 62 : splash,
     });
   }
 
@@ -419,7 +420,7 @@
     const p = G.player;
     if (G.skillCd > 0 || p.mana < g.mana) return;
     p.mana -= g.mana;
-    G.skillCd = g.cd;
+    G.skillCd = g.cd * (1 - G.ramIdx * 0.055);
     G.skillCasts++;
     p.castTimer = 0.6;
     if (g.skill === 'nuke') { blip(60, 0.7, 'sawtooth', 0.3, 25); noiseBurst(0.6, 0.3, 600); }
@@ -576,19 +577,29 @@
       } else if (!G.bossSpawned) {
         G.bossSpawned = true;
         const p2 = G.player;
+        // Boss 登场清场：小怪当场爆成粒子，专心打 Boss
+        let burst = 0;
+        for (const e of G.enemies) {
+          if (e.isBoss) continue;
+          if (burst < 90) addParticles(e.x, e.y, e.color, 5, 240, 0.45);
+          burst++;
+        }
+        G.enemies.length = 0;
+        G.gold += 60;
         spawnEnemy('boss', p2.x + 600, p2.y - 300, 1, 1);
         addText(p2.x, p2.y - 90, 'Boss 出现：RTX 690 双芯核弹', '#ff3df0', 30);
+        addText(p2.x, p2.y - 56, '清场 +60 矿币', '#ffd166', 18);
         addShake(20);
       }
     }
 
     // ----- 生成敌人 -----
     if (!G.bossSpawned) {
-      const rate = 0.95 + G.wave * 0.35;
+      const rate = 1.90 + G.wave * 0.62;
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
-        if (G.enemies.length > 300) break;
+        if (G.enemies.length > 420) break;
         const roll = Math.random();
         let type = 'worm';
         if (G.wave >= 2 && roll < 0.34) type = 'trojan';
@@ -609,7 +620,7 @@
       if (e.dead) continue;
       const dx = e.x - p.x, dy = e.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      const minD = e.r + 16;
+      const minD = e.r + 27;
       if (d < minD) {
         hitPlayer(e.dmg * 0.26);
         const k = (minD - d) * Math.min(1, dt * 10);
@@ -682,12 +693,17 @@
     // 敌人之间做轻量分离，避免完全叠成一坨
     const arr = G.enemies;
     const n = arr.length;
+    const px0 = p.x, py0 = p.y, lim = 620 * 620;
     for (let i = 0; i < n; i++) {
       const a = arr[i];
       if (a.dead) continue;
+      const adx = a.x - px0, ady = a.y - py0;
+      if (adx * adx + ady * ady > lim) continue;
       for (let j = i + 1; j < n; j++) {
         const b = arr[j];
         if (b.dead) continue;
+        const bdx = b.x - px0, bdy = b.y - py0;
+        if (bdx * bdx + bdy * bdy > lim) continue;
         const dx = b.x - a.x, dy = b.y - a.y;
         const rr = (a.r + b.r) * 0.92;
         const d2 = dx * dx + dy * dy;
@@ -727,6 +743,18 @@
           if (dist(b.x, b.y, e.x, e.y) < e.r + b.r) {
             damageEnemy(e, b.dmg, b.x, b.y);
             addParticles(b.x, b.y, b.color, 4, 180, 0.3);
+            // 溅射：一枪扫一片
+            if (b.splash > 0) {
+              const s2 = b.splash * b.splash;
+              for (const o of G.enemies) {
+                if (o === e || o.dead) continue;
+                const ddx = o.x - b.x, ddy = o.y - b.y;
+                if (ddx * ddx + ddy * ddy < s2) {
+                  damageEnemy(o, b.dmg * 0.65, o.x, o.y, true);
+                  addParticles(o.x, o.y, b.color, 2, 120, 0.22);
+                }
+              }
+            }
             if (b.pierce > 0) {
               b.pierce--;
               if (!b.hitSet) b.hitSet = new Set();
