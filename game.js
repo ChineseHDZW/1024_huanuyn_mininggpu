@@ -91,6 +91,10 @@
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    if (G.state === 'stats') {
+      if (e.code === 'Escape' || e.code === 'KeyP') backToMenu();
+      return;
+    }
     if (e.code === 'KeyR') game.restart();
     if (e.code === 'KeyM') { AC.muted = !AC.muted; SaveData.muted = AC.muted; persistSave(); }
     if (e.code === 'KeyP' || e.code === 'Escape') { togglePause(); }
@@ -271,7 +275,17 @@
   const SAVE_VERSION = 1;
 
   function emptyStats() {
-    return { bestWave: 0, bestKills: 0, bestTime: 0, runs: 0, totalKills: 0, totalTime: 0 };
+    return { bestWave: 0, bestKills: 0, bestTime: 0, bestClear: 0, runs: 0, totalKills: 0, totalTime: 0 };
+  }
+
+  function emptyDetail() {
+    return {
+      wins: 0, deaths: 0,
+      kills: { worm: 0, trojan: 0, leak: 0, boss: 0 },
+      goldEarned: 0, goldSpent: 0,
+      damage: 0, skills: 0, softwareUses: 0,
+      buys: { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} },
+    };
   }
 
   const SaveData = {
@@ -285,6 +299,7 @@
     totalKills: 0,
     totalTime: 0,
     stats: { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() },
+    detail: emptyDetail(),
     run: null,
   };
 
@@ -316,7 +331,34 @@
     SaveData.totalKills = 0;
     SaveData.totalTime = 0;
     SaveData.stats = { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() };
+    SaveData.detail = emptyDetail();
     SaveData.run = null;
+  }
+
+  function adoptDetail(src) {
+    if (!src || typeof src !== 'object') return;
+    const d = SaveData.detail;
+    const num = (v) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+    d.wins += num(src.wins);
+    d.deaths += num(src.deaths);
+    if (src.kills && typeof src.kills === 'object') {
+      for (const k of ['worm', 'trojan', 'leak', 'boss']) d.kills[k] += num(src.kills[k]);
+    }
+    d.goldEarned += num(src.goldEarned);
+    d.goldSpent += num(src.goldSpent);
+    d.damage += num(src.damage);
+    d.skills += num(src.skills);
+    d.softwareUses += num(src.softwareUses);
+    if (src.buys && typeof src.buys === 'object') {
+      for (const kind of Object.keys(d.buys)) {
+        const b = src.buys[kind];
+        if (!b || typeof b !== 'object') continue;
+        for (const key of Object.keys(b)) {
+          const n = num(b[key]);
+          if (n) d.buys[kind][key] = (d.buys[kind][key] || 0) + n;
+        }
+      }
+    }
   }
 
   function adoptStats(dst, src) {
@@ -324,6 +366,7 @@
     if (typeof src.bestWave === 'number') dst.bestWave = clamp(Math.round(src.bestWave), 0, G.TOTAL_WAVES);
     if (typeof src.bestKills === 'number') dst.bestKills = Math.max(0, Math.round(src.bestKills));
     if (typeof src.bestTime === 'number') dst.bestTime = Math.max(0, src.bestTime);
+    if (typeof src.bestClear === 'number') dst.bestClear = Math.max(0, src.bestClear);
     if (typeof src.runs === 'number') dst.runs = Math.max(0, Math.round(src.runs));
     if (typeof src.totalKills === 'number') dst.totalKills = Math.max(0, Math.round(src.totalKills));
     if (typeof src.totalTime === 'number') dst.totalTime = Math.max(0, src.totalTime);
@@ -348,10 +391,11 @@
     } else if (SaveData.bestWave > 0 || SaveData.runs > 0) {
       // 旧存档没有分难度统计：当时的难度就是简单
       SaveData.stats.easy = {
-        bestWave: SaveData.bestWave, bestKills: SaveData.bestKills, bestTime: SaveData.bestTime,
+        bestWave: SaveData.bestWave, bestKills: SaveData.bestKills, bestTime: SaveData.bestTime, bestClear: 0,
         runs: SaveData.runs, totalKills: SaveData.totalKills, totalTime: SaveData.totalTime,
       };
     }
+    adoptDetail(data.detail);
     if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
   }
 
@@ -398,6 +442,13 @@
       softwares: G.softwares.map((s) => s.id),
       kills: G.kills,
       playTime: Math.round(G.playTime),
+      killCounts: Object.assign({}, G.killCounts),
+      goldEarned: G.goldEarned,
+      goldSpent: G.goldSpent,
+      softwareUses: G.softwareUses,
+      skillCasts: G.skillCasts,
+      damageDealt: G.damageDealt,
+      buys: JSON.parse(JSON.stringify(G.buys)),
     };
     persistSave();
   }
@@ -412,9 +463,30 @@
     if (G.playTime > (s.bestTime || 0)) s.bestTime = G.playTime;
   }
 
-  function recordRun() {
+  function recordRun(won) {
+    const bucket = SaveData.stats[G.difficulty] || SaveData.stats.easy;
     bumpStats(SaveData);
-    bumpStats(SaveData.stats[G.difficulty] || SaveData.stats.easy);
+    bumpStats(bucket);
+    const d = SaveData.detail;
+    if (won) {
+      d.wins++;
+      if (!bucket.bestClear || G.playTime < bucket.bestClear) bucket.bestClear = G.playTime;
+    } else {
+      d.deaths++;
+    }
+    // 本局的细项都并进存档累计
+    for (const k of ['worm', 'trojan', 'leak', 'boss']) d.kills[k] += G.killCounts[k] || 0;
+    d.goldEarned += G.goldEarned;
+    d.goldSpent += G.goldSpent;
+    d.damage += G.damageDealt;
+    d.skills += G.skillCasts;
+    d.softwareUses += G.softwareUses;
+    for (const kind of Object.keys(d.buys)) {
+      const src = G.buys[kind] || {};
+      for (const key of Object.keys(src)) {
+        if (src[key]) d.buys[kind][key] = (d.buys[kind][key] || 0) + src[key];
+      }
+    }
     SaveData.run = null;
     persistSave();
   }
@@ -510,7 +582,7 @@
 
   // ---------------- 游戏状态 ----------------
   const G = {
-    state: 'menu',          // menu | playing | shop | dead | win
+    state: 'menu',          // menu | stats | playing | shop | dead | win
     paused: false,
     speedMul: 1,            // 1 / 2 / 4 倍速
     difficulty: 'easy',     // easy | normal | hard
@@ -546,6 +618,13 @@
     damageDealt: 0,
     playTime: 0,
 
+    // 本局细项，结算时并进存档
+    killCounts: { worm: 0, trojan: 0, leak: 0, boss: 0 },
+    goldEarned: 0,
+    goldSpent: 0,
+    softwareUses: 0,
+    buys: { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} },
+
     cpuIdx: 0,
     gpuIdx: 0,
     ramIdx: 0,
@@ -577,6 +656,11 @@
     G.speedMul = 1;
     G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
     G.t = 0;
+    G.killCounts = { worm: 0, trojan: 0, leak: 0, boss: 0 };
+    G.goldEarned = 0;
+    G.goldSpent = 0;
+    G.softwareUses = 0;
+    G.buys = { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} };
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
       hp: 120, maxHp: 120,
@@ -798,7 +882,7 @@
     const p = G.player;
     G.softCds[i] = sw.cd;
     G.softFlash[i] = 0.45;
-    G.skillCasts++;
+    G.softwareUses++;
 
     if (sw.effect === 'aoe') {
       const R = 470;
@@ -841,6 +925,7 @@
     } else if (sw.effect === 'gold') {
       G.goldBoostTimer = 6;
       G.gold += 80;
+      G.goldEarned += 80;
       addText(p.x, p.y - 76, '算力上线', sw.color, 24);
       blip(1000, 0.15, 'square', 0.12, 1500);
     } else if (sw.effect === 'shield') {
@@ -867,6 +952,8 @@
     if (e.dead) return;
     e.dead = true;
     G.kills++;
+    const kc = e.isBoss ? 'boss' : e.type;
+    G.killCounts[kc] = (G.killCounts[kc] || 0) + 1;
     G.combo++;
     G.comboTimer = 2.4;
     const n = e.isBoss ? 80 : 16;
@@ -878,7 +965,7 @@
       for (let i = 0; i < 12; i++) {
         G.pickups.push({ x: e.x + rnd(90, -90), y: e.y + rnd(90, -90), vx: 0, vy: 0, v: rnd(12, 6), r: 6, life: 12 });
       }
-      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; recordRun(); } }, 900);
+      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; recordRun(true); } }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
       if (Math.random() < 0.045) {
@@ -985,6 +1072,7 @@
         }
         G.enemies.length = 0;
         G.gold += 60;
+        G.goldEarned += 60;
         const bbx = ARENA.w / 2 - 90, bby = ARENA.h / 2 - 90;
         spawnEnemy('boss', clamp(p2.x + 600, -bbx, bbx), clamp(p2.y - 300, -bby, bby), 1, 1);
         addText(p2.x, p2.y - 90, 'Boss 出现：GTX 690 双芯核弹', '#ff3df0', 30);
@@ -1039,7 +1127,7 @@
     // ----- 死亡 -----
     if (p.hp <= 0) {
       G.state = 'dead';
-      recordRun();
+      recordRun(false);
       addParticles(p.x, p.y, '#8ef2ff', 40, 380, 1.0);
       addShake(20);
     }
@@ -1209,7 +1297,9 @@
           blip(760, 0.09, 'sine', 0.09, 1250);
           addText(p.x, p.y - 34, '+' + c.heal + ' HP', '#7dff9b', 15);
         } else {
-          G.gold += G.goldBoostTimer > 0 ? c.v * 2 : c.v;
+          const gain = G.goldBoostTimer > 0 ? c.v * 2 : c.v;
+          G.gold += gain;
+          G.goldEarned += gain;
           blip(1280, 0.05, 'sine', 0.07, 1900);
           addText(p.x, p.y - 34, '+' + c.v, '#ffd166', 14);
         }
@@ -1329,6 +1419,9 @@
       return;
     }
     G.gold -= card.cost;
+    G.goldSpent += card.cost;
+    const buyKey = card.kind === 'software' ? card.sw.id : card.idx;
+    if (G.buys[card.kind]) G.buys[card.kind][buyKey] = (G.buys[card.kind][buyKey] || 0) + 1;
     if (card.kind === 'cpu') G.cpuIdx = card.idx;
     if (card.kind === 'gpu') { G.gpuIdx = card.idx; G.skillCd = 0; }
     if (card.kind === 'ram') {
@@ -1390,9 +1483,9 @@
     blip(f, 0.06, 'sine', 0.07, f * 1.3);
   }
 
-  // 暂停里返回主界面：保留「每波开始」的进度存档，不额外覆盖
+  // 暂停/统计里返回主界面：保留「每波开始」的进度存档，不额外覆盖
   function backToMenu() {
-    if (G.state !== 'playing') return;
+    if (G.state !== 'playing' && G.state !== 'stats') return;
     G.paused = false;
     G.state = 'menu';
     G.uiButtons.length = 0;
@@ -1422,6 +1515,13 @@
     G.softFlash = G.softwares.map(() => 0);
     G.kills = Math.max(0, Math.round(r.kills) || 0);
     G.playTime = Math.max(0, Math.round(r.playTime) || 0);
+    G.killCounts = Object.assign({ worm: 0, trojan: 0, leak: 0, boss: 0 }, r.killCounts || {});
+    G.goldEarned = Math.max(0, Math.round(r.goldEarned) || 0);
+    G.goldSpent = Math.max(0, Math.round(r.goldSpent) || 0);
+    G.softwareUses = Math.max(0, Math.round(r.softwareUses) || 0);
+    G.skillCasts = Math.max(0, Math.round(r.skillCasts) || 0);
+    G.damageDealt = Math.max(0, r.damageDealt || 0);
+    if (r.buys && typeof r.buys === 'object') G.buys = JSON.parse(JSON.stringify(r.buys));
     G.state = 'playing';
     G.paused = false;
     addText(G.cam.x, G.cam.y - 250, '第 ' + G.wave + ' 波', '#8ef2ff', 34);
@@ -1479,6 +1579,7 @@
     if (G.state === 'playing') drawHUD();
     if (G.state === 'playing' && G.paused) drawPause();
     if (G.state === 'menu') drawMenu();
+    if (G.state === 'stats') drawStats();
     if (G.state === 'shop') drawShop();
     if (G.state === 'dead') drawGameOver();
     if (G.state === 'win') drawWin();
@@ -2456,33 +2557,36 @@
     ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 4);
 
     // 难度选择（只影响怪物伤害）
-    drawDifficultyButtons(H / 2 + 28);
+    drawDifficultyButtons(H / 2 + 18);
 
-    // 分难度统计 + 总计
-    drawMenuStats(H / 2 + 84);
+    // 分难度统计 + 最快通关 + 总计
+    drawMenuStats(H / 2 + 72);
 
     const hasRun = !!(SaveData.run && SaveData.run.wave);
-    const btnY = H / 2 + 180;
+    const btnY = H / 2 + 188;
     if (hasRun) {
       const rd = diffOf(SaveData.run.difficulty);
       ctx.font = 'bold 12px ' + FONT;
       ctx.fillStyle = 'rgba(170,195,230,0.75)';
-      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（伤害 ×' + rd.dmg.toFixed(1) + '）', W / 2, btnY - 18);
+      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（伤害 ×' + rd.dmg.toFixed(1) + '）', W / 2, btnY - 22);
       drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 198, btnY, 190, 50, '#8ef2ff', resumeSavedRun);
       drawMenuButton('新开一局', W / 2 + 8, btnY, 190, 50, 'rgba(190,215,255,0.75)', startNewGame);
     } else {
       drawMenuButton('开始游戏', W / 2 - 150, btnY, 300, 50, '#8ef2ff', startNewGame);
     }
 
-    // 存档导出 / 导入
-    const sw = 150, sh = 34, sy = H - 92;
-    drawSmallButton('导出存档', W / 2 - sw - 8, sy, sw, sh, exportSave);
-    drawSmallButton('导入存档', W / 2 + 8, sy, sw, sh, importSaveFile);
+    // 统计 / 导出 / 导入
+    const sw = 140, sh = 34, sy = H - 92;
+    const sgap = 10;
+    const sx0 = W / 2 - (sw * 3 + sgap * 2) / 2;
+    drawSmallButton('统计数据', sx0, sy, sw, sh, showStats);
+    drawSmallButton('导出存档', sx0 + sw + sgap, sy, sw, sh, exportSave);
+    drawSmallButton('导入存档', sx0 + (sw + sgap) * 2, sy, sw, sh, importSaveFile);
 
     if (menuNotice && performance.now() < menuNoticeUntil) {
       ctx.font = 'bold 13px ' + FONT;
       ctx.fillStyle = menuNotice.indexOf('失败') >= 0 ? 'rgba(255,120,120,0.95)' : 'rgba(125,255,212,0.95)';
-      ctx.fillText(menuNotice, W / 2, H - 116);
+      ctx.fillText(menuNotice, W / 2, H - 48);
     }
 
     ctx.font = '14px ' + FONT;
@@ -2525,11 +2629,163 @@
       const txt = s.runs > 0
         ? d.name + '  第 ' + s.bestWave + ' 波 · ' + s.bestKills + ' 杀 · ' + fmtClock(s.bestTime)
         : d.name + '  还没打过';
-      ctx.fillText(txt, W / 2, y + i * 21);
+      ctx.fillText(txt, W / 2, y + i * 18);
+    }
+
+    // 最快通关纪录（各难度，毫秒级）
+    const fastest = [];
+    for (const key of DIFF_KEYS) {
+      const s = SaveData.stats[key] || emptyStats();
+      fastest.push(diffOf(key).name + ' ' + (s.bestClear > 0 ? fmtRunTime(s.bestClear) : '—'));
     }
     ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(142,242,255,0.9)';
+    ctx.fillText('最快通关  ' + fastest.join(' · '), W / 2, y + 3 * 18);
+
     ctx.fillStyle = 'rgba(255,209,102,0.85)';
-    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + 3 * 21);
+    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + 4 * 18);
+  }
+
+  function showStats() {
+    if (G.state !== 'menu') return;
+    G.state = 'stats';
+    G.uiButtons.length = 0;
+  }
+
+  function fmtNum(n) {
+    return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  function buyListParts(kind) {
+    const src = SaveData.detail.buys[kind] || {};
+    const parts = [];
+    for (const key of Object.keys(src)) {
+      const n = src[key];
+      if (!n) continue;
+      let name = key;
+      if (kind === 'cpu') name = (CPUS[+key] || {}).name || ('CPU ' + key);
+      else if (kind === 'gpu') name = (GPUS[+key] || {}).name || ('GPU ' + key);
+      else if (kind === 'ram') name = (RAMS[+key] || {}).name || ('RAM ' + key);
+      else if (kind === 'ssd') name = (SSDS[+key] || {}).name || ('SSD ' + key);
+      else if (kind === 'software') {
+        const sw = SOFTWARES.find((s) => s.id === key);
+        name = sw ? sw.name : key;
+      }
+      parts.push(name + ' ×' + n);
+    }
+    return parts.length ? parts : ['还没买过'];
+  }
+
+  // 按「整件物品」换行，避免把型号从中间劈开
+  function drawItemsLeft(items, x, y, maxW, lh) {
+    let line = '', yy = y, lines = 0;
+    for (const item of items) {
+      const candidate = line ? line + '、' + item : item;
+      if (line && ctx.measureText(candidate).width > maxW) {
+        ctx.fillText(line, x, yy); lines++; yy += lh; line = item;
+      } else line = candidate;
+    }
+    if (line) { ctx.fillText(line, x, yy); lines++; }
+    return lines;
+  }
+
+  // ----- 统计数据 -----
+  function drawStats() {
+    G.uiButtons.length = 0;
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 36px ' + FONT;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.fillText('统计数据', W / 2, 58);
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(170,195,230,0.8)';
+    ctx.fillText('当前存档从第一次游玩到现在的累计', W / 2, 88);
+
+    ctx.fillStyle = 'rgba(8,14,26,0.9)';
+    ctx.strokeStyle = 'rgba(90,130,180,0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(52, 112, 588, 512, 14); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.roundRect(660, 112, 568, 512, 14); ctx.fill(); ctx.stroke();
+
+    const d = SaveData.detail;
+    const k = d.kills;
+    const totalKills = k.worm + k.trojan + k.leak + k.boss;
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('总体', 76, 148);
+
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(205,228,255,0.9)';
+    const lx = 76;
+    ctx.fillText('总局数 ' + SaveData.runs + '  ·  通关 ' + d.wins + '  ·  阵亡 ' + d.deaths, lx, 178);
+    ctx.fillText('总时长 ' + fmtClock(SaveData.totalTime) + '  ·  总伤害 ' + fmtNum(d.damage), lx, 204);
+    ctx.fillText('获得矿币 ' + fmtNum(d.goldEarned) + '  ·  花费矿币 ' + fmtNum(d.goldSpent), lx, 230);
+    ctx.fillText('显卡技能 ' + fmtNum(d.skills) + ' 次  ·  软件释放 ' + fmtNum(d.softwareUses) + ' 次', lx, 256);
+
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('击杀', lx, 296);
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(205,228,255,0.9)';
+    ctx.fillText('病毒 ' + fmtNum(k.worm) + '  ·  木马 ' + fmtNum(k.trojan) + '  ·  内存泄漏 ' + fmtNum(k.leak) + '  ·  Boss ' + fmtNum(k.boss), lx, 326);
+    ctx.fillStyle = 'rgba(160,190,225,0.75)';
+    ctx.fillText('合计 ' + fmtNum(totalKills) + ' 只', lx, 352);
+
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('分难度', lx, 396);
+
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,180,215,0.75)';
+    const cols = [76, 168, 252, 336, 452, 552];
+    const head = ['难度', '局数', '最高波', '击杀', '最长存活', '最快通关'];
+    for (let i = 0; i < head.length; i++) ctx.fillText(head[i], cols[i], 422);
+
+    for (let i = 0; i < DIFF_KEYS.length; i++) {
+      const key = DIFF_KEYS[i];
+      const s = SaveData.stats[key] || emptyStats();
+      const dd = diffOf(key);
+      const yy = 448 + i * 24;
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = s.runs > 0 ? dd.color : 'rgba(140,160,190,0.5)';
+      ctx.fillText(dd.name, cols[0], yy);
+      ctx.fillStyle = 'rgba(205,228,255,0.88)';
+      ctx.fillText(String(s.runs), cols[1], yy);
+      ctx.fillText(String(s.bestWave), cols[2], yy);
+      ctx.fillText(fmtNum(s.bestKills), cols[3], yy);
+      ctx.fillText(s.bestTime > 0 ? fmtClock(s.bestTime) : '—', cols[4], yy);
+      ctx.fillText(s.bestClear > 0 ? fmtRunTime(s.bestClear) : '—', cols[5], yy);
+    }
+
+    // 购买记录
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.textAlign = 'left';
+    ctx.fillText('购买记录', 684, 148);
+
+    const kinds = [
+      ['cpu', 'CPU 升级'],
+      ['gpu', '显卡'],
+      ['ram', '内存'],
+      ['ssd', 'SSD'],
+      ['software', '软件'],
+    ];
+    let by = 184;
+    for (const [kind, label] of kinds) {
+      ctx.font = 'bold 14px ' + FONT;
+      ctx.fillStyle = 'rgba(190,215,245,0.95)';
+      ctx.fillText(label, 684, by);
+      ctx.font = '13px ' + FONT;
+      ctx.fillStyle = 'rgba(205,228,255,0.85)';
+      const lines = drawItemsLeft(buyListParts(kind), 684, by + 22, 510, 18);
+      by += 22 + lines * 18 + 14;
+    }
+
+    drawSmallButton('返回主菜单', W / 2 - 90, H - 62, 180, 38, backToMenu);
   }
 
   function fmtClock(sec) {
