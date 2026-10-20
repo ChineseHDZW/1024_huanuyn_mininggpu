@@ -92,14 +92,22 @@
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR') game.restart();
     if (e.code === 'KeyM') { AC.muted = !AC.muted; }
-    if (e.code === 'Space') { useSoftware(0); }
-    if (e.code === 'Digit1') { useSoftware(0); }
-    if (e.code === 'Digit2') { useSoftware(1); }
-    if (e.code === 'Digit3') { useSoftware(2); }
-    if (e.code === 'Digit4') { useSoftware(3); }
+    if (e.code === 'KeyP' || e.code === 'Escape') { togglePause(); }
+    // 只有战斗中才响应软件快捷键，避免在商店/结算/暂停界面白烧冷却
+    if (G.state === 'playing' && !G.paused) {
+      if (e.code === 'Space') { useSoftware(0); }
+      if (e.code === 'Digit1') { useSoftware(0); }
+      if (e.code === 'Digit2') { useSoftware(1); }
+      if (e.code === 'Digit3') { useSoftware(2); }
+      if (e.code === 'Digit4') { useSoftware(3); }
+    }
   });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
   window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+  // 切到后台自动暂停，回来不至于已经被怪围死
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && G.state === 'playing' && !G.paused) togglePause();
+  });
 
   function toLogical(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
@@ -276,6 +284,7 @@
   // ---------------- 游戏状态 ----------------
   const G = {
     state: 'menu',          // menu | playing | shop | dead | win
+    paused: false,
     t: 0,
     fps: 60,
 
@@ -327,12 +336,15 @@
     uiButtons: [],
     shopCards: [],
     shopChosen: false,
+    shopHint: '',
+    shopHintT: 0,
 
     bestWave: 1,
   };
 
   function resetGame() {
     G.state = 'playing';
+    G.paused = false;
     G.t = 0;
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
@@ -548,6 +560,7 @@
   }
 
   function useSoftware(i) {
+    if (G.state !== 'playing' || G.paused) return false;
     const sw = G.softwares[i];
     if (!sw) return false;
     if (G.softCds[i] > 0) return false;
@@ -652,6 +665,7 @@
       if (G.state === 'shop') { /* 商店暂停世界 */ }
       return;
     }
+    if (G.paused) return;
     G.t += dt;
     G.playTime += dt;
 
@@ -742,7 +756,7 @@
         G.gold += 60;
         const bbx = ARENA.w / 2 - 90, bby = ARENA.h / 2 - 90;
         spawnEnemy('boss', clamp(p2.x + 600, -bbx, bbx), clamp(p2.y - 300, -bby, bby), 1, 1);
-        addText(p2.x, p2.y - 90, 'Boss 出现：RTX 690 双芯核弹', '#ff3df0', 30);
+        addText(p2.x, p2.y - 90, 'Boss 出现：GTX 690 双芯核弹', '#ff3df0', 30);
         addText(p2.x, p2.y - 56, '清场 +60 矿币', '#ffd166', 18);
         addShake(20);
       }
@@ -1105,6 +1119,15 @@
   function continueWave() {
     G.state = 'playing';
     G.waveTime = 0;
+    G.uiButtons.length = 0; // 清掉商店留下的按钮，避免恢复战斗后误触购买
+  }
+
+  function togglePause() {
+    if (G.state !== 'playing') return;
+    G.paused = !G.paused;
+    G.uiButtons.length = 0; // 切换瞬间清掉旧按钮，避免恢复时误点
+    if (G.paused) blip(560, 0.09, 'sine', 0.09, 360);
+    else blip(760, 0.09, 'sine', 0.09, 1100);
   }
 
   // ---------------- 点击 ----------------
@@ -1121,7 +1144,7 @@
   }
 
   // ---------------- 绘制 ----------------
-  function draw() {
+  function draw(dt) {
     const s = scale * dpr;
     ctx.setTransform(s, 0, 0, s, offX * dpr, offY * dpr);
     ctx.fillStyle = '#05060c';
@@ -1144,14 +1167,15 @@
     if (G.state !== 'dead') drawPlayer();
     drawBullets();
     drawEBullets();
-    drawFx();
+    drawFx(dt);
     drawParticles();
-    drawTexts();
+    drawTexts(dt);
 
     ctx.restore();
 
     drawVignette();
     if (G.state === 'playing') drawHUD();
+    if (G.state === 'playing' && G.paused) drawPause();
     if (G.state === 'menu') drawMenu();
     if (G.state === 'shop') drawShop();
     if (G.state === 'dead') drawGameOver();
@@ -1676,7 +1700,7 @@
     }
   }
 
-  function drawFx() {
+  function drawFx(dt) {
     for (const f of G.fx) {
       if (f.type === 'laser') {
         const k = 1 - f.t / f.life;
@@ -1729,7 +1753,7 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawTexts() {
+  function drawTexts(dt) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const t of G.texts) {
@@ -1740,8 +1764,8 @@
       ctx.fillText(t.str, t.x + 2, t.y + 2);
       ctx.fillStyle = t.color;
       ctx.fillText(t.str, t.x, t.y);
-      t.y += t.vy * 0.016;
-      t.life -= 0.016;
+      t.y += t.vy * dt;
+      t.life -= dt;
     }
     ctx.globalAlpha = 1;
   }
@@ -1858,6 +1882,23 @@
       ctx.fillStyle = 'rgba(255,209,102,' + clamp(G.comboTimer, 0, 1) + ')';
       ctx.fillText('x' + G.combo, W / 2, 70);
     }
+
+    // 右上角暂停按钮（手机只有触屏，得能点得到）
+    const pbSize = 46;
+    const pbx = W - 30 - pbSize, pby = 128;
+    const pbHover = mouse.x > pbx && mouse.x < pbx + pbSize && mouse.y > pby && mouse.y < pby + pbSize;
+    ctx.fillStyle = pbHover ? 'rgba(32,58,88,0.95)' : 'rgba(14,24,44,0.82)';
+    ctx.strokeStyle = 'rgba(142,242,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(pbx, pby, pbSize, pbSize, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,230,255,0.9)';
+    ctx.fillRect(pbx + 15, pby + 13, 5, 20);
+    ctx.fillRect(pbx + 26, pby + 13, 5, 20);
+    ctx.font = 'bold 10px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.65)';
+    ctx.textAlign = 'center';
+    ctx.fillText('P', pbx + pbSize / 2, pby + pbSize - 7);
+    G.uiButtons.push({ x: pbx, y: pby, w: pbSize, h: pbSize, action: togglePause });
   }
 
   function drawSoftwareBar() {
@@ -1921,6 +1962,42 @@
     ctx.restore();
   }
 
+  // ----- 暂停 -----
+  function drawPause() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(3,6,14,0.66)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = 'bold 56px ' + FONT;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.shadowBlur = 24;
+    ctx.shadowColor = 'rgba(110,220,255,0.7)';
+    ctx.fillText('已暂停', W / 2, H / 2 - 78);
+    ctx.shadowBlur = 0;
+
+    ctx.font = 'bold 17px ' + FONT;
+    ctx.fillStyle = 'rgba(190,215,255,0.82)';
+    ctx.fillText('第 ' + G.wave + ' 波 · 击杀 ' + G.kills + ' · ◈ ' + G.gold + ' · 用时 ' + Math.floor(G.playTime) + ' 秒', W / 2, H / 2 - 22);
+
+    const bw = 220, bh = 56, bx = W / 2 - bw / 2, by = H / 2 + 24;
+    const hov = mouse.x > bx && mouse.x < bx + bw && mouse.y > by && mouse.y < by + bh;
+    ctx.fillStyle = hov ? 'rgba(50,92,130,0.95)' : 'rgba(26,44,68,0.95)';
+    ctx.strokeStyle = 'rgba(142,242,255,0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 20px ' + FONT;
+    ctx.fillText('继续游戏', W / 2, by + bh / 2 + 1);
+    G.uiButtons.push({ x: bx, y: by, w: bw, h: bh, action: togglePause });
+
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.75)';
+    ctx.fillText('P / Esc 也可以继续', W / 2, by + bh + 30);
+    ctx.restore();
+  }
+
   // ----- 菜单 -----
   function drawMenu() {
     const bg = ASSETS.bgMenu;
@@ -1956,7 +2033,7 @@
     ctx.fillStyle = 'rgba(185,205,235,0.9)';
     ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 + 20);
     ctx.fillStyle = 'rgba(165,190,225,0.85)';
-    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存', W / 2, H / 2 + 48);
+    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 48);
 
     const blink = 0.78 + Math.sin(performance.now() / 420) * 0.22;
     ctx.fillStyle = 'rgba(142,242,255,' + blink + ')';
@@ -2236,7 +2313,7 @@
     dt = Math.min(dt, 1 / 30);
 
     update(dt);
-    draw();
+    draw(dt);
 
     requestAnimationFrame(loop);
   }
