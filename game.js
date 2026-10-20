@@ -15,6 +15,9 @@
   const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
   const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
 
+  // ---------------- 场地 ----------------
+  const ARENA = { w: 2300, h: 1500 };
+
   // ---------------- 画布与缩放 ----------------
   const W = 1280, H = 720;
   const canvas = document.getElementById('game');
@@ -389,10 +392,20 @@
   }
 
   function spawnEnemyAround(type) {
-    const a = rnd(TAU, 0);
-    const r = 520 + rnd(220, 0);
-    spawnEnemy(type, G.cam.x + Math.cos(a) * r, G.cam.y + Math.sin(a) * r,
-      1 + G.wave * 0.26, 1 + G.wave * 0.10);
+    const p = G.player;
+    const bx = ARENA.w / 2 - 40, by = ARENA.h / 2 - 40;
+    for (let tries = 0; tries < 10; tries++) {
+      const a = rnd(TAU, 0);
+      const r = 480 + rnd(320, 0);
+      let x = p.x + Math.cos(a) * r;
+      let y = p.y + Math.sin(a) * r;
+      x = clamp(x, -bx, bx);
+      y = clamp(y, -by, by);
+      if (dist(x, y, p.x, p.y) < 280) continue;
+      spawnEnemy(type, x, y, 1 + G.wave * 0.26, 1 + G.wave * 0.10);
+      return;
+    }
+    spawnEnemy(type, clamp(p.x + 520, -bx, bx), clamp(p.y, -by, by), 1 + G.wave * 0.26, 1 + G.wave * 0.10);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -668,13 +681,22 @@
     p.vy *= Math.pow(0.0004, dt);
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+    const bx = ARENA.w / 2 - 26, by = ARENA.h / 2 - 26;
+    if (p.x < -bx) { p.x = -bx; p.vx = Math.abs(p.vx) * 0.3; }
+    if (p.x > bx) { p.x = bx; p.vx = -Math.abs(p.vx) * 0.3; }
+    if (p.y < -by) { p.y = -by; p.vy = Math.abs(p.vy) * 0.3; }
+    if (p.y > by) { p.y = by; p.vy = -Math.abs(p.vy) * 0.3; }
     if (ix !== 0) p.facing = ix > 0 ? 1 : -1;
     const moving = Math.hypot(p.vx, p.vy) > 20;
     if (moving) p.walk += dt * 11;
 
     // ----- 相机 -----
-    G.cam.x = lerp(G.cam.x, p.x, 1 - Math.pow(0.0015, dt));
-    G.cam.y = lerp(G.cam.y, p.y, 1 - Math.pow(0.0015, dt));
+    const camX = lerp(G.cam.x, p.x, 1 - Math.pow(0.0015, dt));
+    const camY = lerp(G.cam.y, p.y, 1 - Math.pow(0.0015, dt));
+    const cxMax = Math.max(0, ARENA.w / 2 - W / 2 + 170);
+    const cyMax = Math.max(0, ARENA.h / 2 - H / 2 + 170);
+    G.cam.x = clamp(camX, -cxMax, cxMax);
+    G.cam.y = clamp(camY, -cyMax, cyMax);
 
     // ----- 蓝条 -----
     p.mana = Math.min(p.maxMana, p.mana + ram().regen * dt);
@@ -718,7 +740,8 @@
         }
         G.enemies.length = 0;
         G.gold += 60;
-        spawnEnemy('boss', p2.x + 600, p2.y - 300, 1, 1);
+        const bbx = ARENA.w / 2 - 90, bby = ARENA.h / 2 - 90;
+        spawnEnemy('boss', clamp(p2.x + 600, -bbx, bbx), clamp(p2.y - 300, -bby, bby), 1, 1);
         addText(p2.x, p2.y - 90, 'Boss 出现：RTX 690 双芯核弹', '#ff3df0', 30);
         addText(p2.x, p2.y - 56, '清场 +60 矿币', '#ffd166', 18);
         addShake(20);
@@ -807,6 +830,11 @@
       const spdMul = G.slowTimer > 0 ? 0.45 : 1;
       e.x += (dx / d) * e.speed * spdMul * dt;
       e.y += (dy / d) * e.speed * spdMul * dt;
+      const ebx = ARENA.w / 2 - e.r - 6, eby = ARENA.h / 2 - e.r - 6;
+      if (e.x < -ebx) e.x = -ebx;
+      if (e.x > ebx) e.x = ebx;
+      if (e.y < -eby) e.y = -eby;
+      if (e.y > eby) e.y = eby;
       e.t += dt * (e.isBoss ? 1.4 : 3.2);
       if (e.hit > 0) e.hit -= dt;
       if (e.isBoss) {
@@ -1149,13 +1177,24 @@
   }
 
   function drawBackground(sx, sy) {
+    // 场外
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    const ax = -ARENA.w / 2 - G.cam.x + W / 2 + sx;
+    const ay = -ARENA.h / 2 - G.cam.y + H / 2 + sy;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ax, ay, ARENA.w, ARENA.h);
+    ctx.clip();
+
     const g = ctx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, 820);
     g.addColorStop(0, '#0b1226');
     g.addColorStop(1, '#04050a');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    // 电路板地面纹理
     const floorImg = ASSETS.floor;
     if (floorImg && floorImg.complete && floorImg.naturalWidth) {
       const size = 480;
@@ -1173,7 +1212,6 @@
       ctx.fillRect(0, 0, W, H);
     }
 
-    // 滚动网格
     const step = 90;
     const ox = ((-G.cam.x + sx) % step + step) % step;
     const oy = ((-G.cam.y + sy) % step + step) % step;
@@ -1184,7 +1222,6 @@
     for (let y = oy; y < H; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
 
-    // 更亮的主网格
     const big = step * 4;
     const ox2 = ((-G.cam.x + sx) % big + big) % big;
     const oy2 = ((-G.cam.y + sy) % big + big) % big;
@@ -1193,6 +1230,55 @@
     for (let x = ox2; x < W; x += big) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
     for (let y = oy2; y < H; y += big) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
+
+    ctx.restore();
+
+    // 围栏内侧的渐变光带
+    const fade = 96;
+    let lg;
+    lg = ctx.createLinearGradient(ax, 0, ax + fade, 0);
+    lg.addColorStop(0, 'rgba(110,225,255,0.30)'); lg.addColorStop(1, 'rgba(110,225,255,0)');
+    ctx.fillStyle = lg; ctx.fillRect(ax, ay, fade, ARENA.h);
+    lg = ctx.createLinearGradient(ax + ARENA.w, 0, ax + ARENA.w - fade, 0);
+    lg.addColorStop(0, 'rgba(110,225,255,0.30)'); lg.addColorStop(1, 'rgba(110,225,255,0)');
+    ctx.fillStyle = lg; ctx.fillRect(ax + ARENA.w - fade, ay, fade, ARENA.h);
+    lg = ctx.createLinearGradient(0, ay, 0, ay + fade);
+    lg.addColorStop(0, 'rgba(110,225,255,0.30)'); lg.addColorStop(1, 'rgba(110,225,255,0)');
+    ctx.fillStyle = lg; ctx.fillRect(ax, ay, ARENA.w, fade);
+    lg = ctx.createLinearGradient(0, ay + ARENA.h, 0, ay + ARENA.h - fade);
+    lg.addColorStop(0, 'rgba(110,225,255,0.30)'); lg.addColorStop(1, 'rgba(110,225,255,0)');
+    ctx.fillStyle = lg; ctx.fillRect(ax, ay + ARENA.h - fade, ARENA.w, fade);
+
+    // 围栏主线条
+    ctx.save();
+    ctx.strokeStyle = 'rgba(140,240,255,0.9)';
+    ctx.lineWidth = 6;
+    ctx.shadowBlur = 32;
+    ctx.shadowColor = 'rgba(110,220,255,1)';
+    ctx.strokeRect(ax, ay, ARENA.w, ARENA.h);
+    ctx.restore();
+
+    // 四角加粗
+    ctx.save();
+    ctx.strokeStyle = 'rgba(190,250,255,0.95)';
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = 'rgba(140,240,255,0.9)';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    const L = 70;
+    const corners = [
+      [ax, ay, 1, 1], [ax + ARENA.w, ay, -1, 1],
+      [ax, ay + ARENA.h, 1, -1], [ax + ARENA.w, ay + ARENA.h, -1, -1],
+    ];
+    for (const c of corners) {
+      const cx = c[0], cy = c[1], dxs = c[2], dys = c[3];
+      ctx.beginPath();
+      ctx.moveTo(cx + dxs * L, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy + dys * L);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function drawVignette() {
