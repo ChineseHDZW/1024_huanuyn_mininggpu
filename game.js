@@ -89,6 +89,11 @@
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR') game.restart();
     if (e.code === 'KeyM') { AC.muted = !AC.muted; }
+    if (e.code === 'Space') { useSoftware(0); }
+    if (e.code === 'Digit1') { useSoftware(0); }
+    if (e.code === 'Digit2') { useSoftware(1); }
+    if (e.code === 'Digit3') { useSoftware(2); }
+    if (e.code === 'Digit4') { useSoftware(3); }
   });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
   window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -123,6 +128,12 @@
     if (G.state !== 'playing') {
       game.click(p.x, p.y);
       return;
+    }
+    for (const b of G.uiButtons) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        if (b.action) b.action();
+        return;
+      }
     }
     touch.active = true;
     touch.id = t.identifier;
@@ -198,16 +209,36 @@
     { name: 'DDR5 256G ECC',  maxMana: 430, regen: 30, cost: 950 },
   ];
 
+  // 软件：主动技能，占 SSD 槽位
+  const SOFTWARES = [
+    { id: 'antivirus',  name: '杀毒软件',   tag: '全盘扫描，格杀勿论',   cd: 11, cost: 260, color: '#7dffd4', effect: 'aoe' },
+    { id: 'taskmgr',    name: '任务管理器', tag: '结束掉这些进程',       cd: 14, cost: 240, color: '#8ef2ff', effect: 'slow' },
+    { id: 'afterburner', name: '超频工具',  tag: '功耗墙？不存在的',     cd: 16, cost: 300, color: '#ff8a3d', effect: 'overclock' },
+    { id: 'driver',     name: '驱动更新',   tag: '重启解决 99% 的问题',  cd: 18, cost: 220, color: '#9b8cff', effect: 'reset' },
+    { id: 'restore',    name: '系统还原',   tag: '回到昨天',             cd: 22, cost: 280, color: '#7dff9b', effect: 'heal' },
+    { id: 'donut',      name: '甜甜圈烤机', tag: '先烤自己，再烤别人',   cd: 20, cost: 340, color: '#ffd166', effect: 'burn' },
+    { id: 'miner',      name: '挖矿脚本',   tag: '算力就是钱',           cd: 15, cost: 260, color: '#ffe066', effect: 'gold' },
+    { id: 'firewall',   name: '防火墙',     tag: '已拦截全部伤害',       cd: 19, cost: 320, color: '#5ad1ff', effect: 'shield' },
+  ];
+
+  // SSD：软件槽位上限
+  const SSDS = [
+    { name: 'SATA 128G',    slots: 1, cost: 0 },
+    { name: 'SATA 512G',    slots: 2, cost: 180 },
+    { name: 'NVMe 1T',      slots: 3, cost: 420 },
+    { name: 'NVMe 2T Gen5', slots: 4, cost: 780 },
+  ];
+
   const SKILL_NAMES = {
     storm: '矿渣风暴', laser: '神卡激光', boost: '风扇全开',
     flame: '灭火器', precise: '精准刀法', nuke: '双芯核弹',
   };
 
   const ENEMY_TYPES = {
-    worm:   { hp: 13, speed: 104, dmg: 9,  r: 17, color: '#6fe3ff', gold: 2,  score: 1 },
-    trojan: { hp: 10, speed: 165, dmg: 7,  r: 16, color: '#ff7bd5', gold: 3,  score: 1 },
-    leak:   { hp: 40, speed: 64,  dmg: 16, r: 24, color: '#a98cff', gold: 5, score: 2 },
-    boss:   { hp: 5000, speed: 104, dmg: 22, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
+    worm:   { hp: 13, speed: 108, dmg: 10, r: 17, color: '#6fe3ff', gold: 2,  score: 1 },
+    trojan: { hp: 10, speed: 172, dmg: 8,  r: 16, color: '#ff7bd5', gold: 3,  score: 1 },
+    leak:   { hp: 40, speed: 68,  dmg: 18, r: 24, color: '#a98cff', gold: 5, score: 2 },
+    boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
   // ---------------- 贴图资源 ----------------
@@ -221,6 +252,8 @@
   loadAsset('fishA', 'assets/fish_walkA.png');
   loadAsset('fishB', 'assets/fish_walkB.png');
   loadAsset('fishCast', 'assets/fish_cast.png');
+  loadAsset('fishAtk', 'assets/fish_attack.png');
+  loadAsset('fishHurt', 'assets/fish_hurt.png');
   loadAsset('worm', 'assets/mob_worm.png');
   loadAsset('trojan', 'assets/mob_trojan.png');
   loadAsset('leak', 'assets/mob_leak.png');
@@ -275,6 +308,14 @@
     cpuIdx: 0,
     gpuIdx: 0,
     ramIdx: 0,
+    ssdIdx: 0,
+    softwares: [],
+    softCds: [],
+    softFlash: [],
+    slowTimer: 0,
+    overclockTimer: 0,
+    goldBoostTimer: 0,
+    shieldTimer: 0,
 
     weaponCd: 0,
     skillCd: 0,
@@ -298,6 +339,8 @@
       facing: 1,
       walk: 0,
       castTimer: 0,
+      atkTimer: 0,
+      hurtTimer: 0,
       invuln: 0,
       hitFlash: 0,
     };
@@ -313,6 +356,11 @@
     G.wave = 0; G.waveTime = 0; G.spawnAcc = 0; G.bossSpawned = false;
     G.gold = 0; G.kills = 0; G.combo = 0; G.comboTimer = 0; G.damageDealt = 0; G.playTime = 0; G.skillCasts = 0;
     G.cpuIdx = 0; G.gpuIdx = 0; G.ramIdx = 0;
+    G.ssdIdx = 0;
+    G.softwares.length = 0;
+    G.softCds.length = 0;
+    G.softFlash.length = 0;
+    G.slowTimer = 0; G.overclockTimer = 0; G.goldBoostTimer = 0; G.shieldTimer = 0;
     G.weaponCd = 0; G.skillCd = 0;
     G.buffs.rate = 1; G.buffs.speed = 1; G.buffs.timer = 0;
     G.player.maxMana = RAMS[0].maxMana;
@@ -344,7 +392,7 @@
     const a = rnd(TAU, 0);
     const r = 520 + rnd(220, 0);
     spawnEnemy(type, G.cam.x + Math.cos(a) * r, G.cam.y + Math.sin(a) * r,
-      1 + G.wave * 0.22, 1 + G.wave * 0.09);
+      1 + G.wave * 0.26, 1 + G.wave * 0.10);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -397,8 +445,10 @@
     const target = nearestEnemy(p.x, p.y, 900);
     if (!target) return;
     const baseAngle = Math.atan2(target.y - p.y, target.x - p.x);
-    const interval = c.interval * (G.buffs.timer > 0 ? 0.6 : 1);
+    let interval = c.interval * (G.buffs.timer > 0 ? 0.6 : 1);
+    if (G.overclockTimer > 0) interval *= 0.55;
     G.weaponCd = interval;
+    p.atkTimer = 0.17;
     for (let i = 0; i < c.count; i++) {
       const off = (i - (c.count - 1) / 2) * c.spread;
       fireBullet(p.x, p.y - 8, baseAngle + off, 760, c.dmg, c.pierce, '#8ef2ff', 4.2, target);
@@ -472,6 +522,78 @@
     }
   }
 
+  function equipSoftware(sw) {
+    const slots = SSDS[G.ssdIdx].slots;
+    if (G.softwares.length >= slots) {
+      G.softwares.shift();
+      G.softCds.shift();
+      G.softFlash.shift();
+    }
+    G.softwares.push(sw);
+    G.softCds.push(0);
+    G.softFlash.push(0);
+  }
+
+  function useSoftware(i) {
+    const sw = G.softwares[i];
+    if (!sw) return false;
+    if (G.softCds[i] > 0) return false;
+    const p = G.player;
+    G.softCds[i] = sw.cd;
+    G.softFlash[i] = 0.45;
+    G.skillCasts++;
+
+    if (sw.effect === 'aoe') {
+      const R = 470;
+      for (const e of G.enemies) {
+        if (e.dead) continue;
+        if (dist(e.x, e.y, p.x, p.y) < R) damageEnemy(e, 240 + G.wave * 34, e.x, e.y, true);
+      }
+      G.fx.push({ type: 'ring', x: p.x, y: p.y, r: 0, maxR: R, t: 0, life: 0.55, color: sw.color });
+      addShake(10);
+      addParticles(p.x, p.y, sw.color, 40, 430, 0.7);
+      blip(1200, 0.2, 'sawtooth', 0.14, 200);
+    } else if (sw.effect === 'slow') {
+      G.slowTimer = 4;
+      addText(p.x, p.y - 76, '进程结束', sw.color, 24);
+      blip(300, 0.3, 'square', 0.12, 120);
+    } else if (sw.effect === 'overclock') {
+      G.overclockTimer = 5;
+      addText(p.x, p.y - 76, '超频！', sw.color, 24);
+      blip(700, 0.25, 'sawtooth', 0.14, 1500);
+    } else if (sw.effect === 'reset') {
+      G.skillCd = 0;
+      p.mana = Math.min(p.maxMana, p.mana + 45);
+      addText(p.x, p.y - 76, '驱动已更新', sw.color, 24);
+      blip(900, 0.2, 'sine', 0.12, 1600);
+    } else if (sw.effect === 'heal') {
+      const heal = Math.round(p.maxHp * 0.35);
+      p.hp = Math.min(p.maxHp, p.hp + heal);
+      addText(p.x, p.y - 76, '+' + heal + ' HP', sw.color, 24);
+      blip(600, 0.3, 'sine', 0.12, 900);
+    } else if (sw.effect === 'burn') {
+      for (const e of G.enemies) {
+        if (e.dead) continue;
+        if (dist(e.x, e.y, p.x, p.y) < 950) damageEnemy(e, 320 + G.wave * 42, e.x, e.y, true);
+      }
+      G.flash = 0.4; addShake(16);
+      p.hp -= p.maxHp * 0.12;
+      p.invuln = 0.6;
+      addText(p.x, p.y - 76, '烤机！', sw.color, 26);
+      blip(80, 0.5, 'sawtooth', 0.2, 30);
+    } else if (sw.effect === 'gold') {
+      G.goldBoostTimer = 6;
+      G.gold += 80;
+      addText(p.x, p.y - 76, '算力上线', sw.color, 24);
+      blip(1000, 0.15, 'square', 0.12, 1500);
+    } else if (sw.effect === 'shield') {
+      G.shieldTimer = 3.2;
+      addText(p.x, p.y - 76, '防火墙已开启', sw.color, 24);
+      blip(520, 0.35, 'sine', 0.14, 780);
+    }
+    return true;
+  }
+
   function damageEnemy(e, dmg, hx, hy, silent) {
     if (e.dead) return;
     e.hp -= dmg;
@@ -507,7 +629,7 @@
       }
     }
     if (G.combo > 0 && G.combo % 25 === 0) {
-      addText(G.player.x, G.player.y - 70, '连杀 x' + G.combo, '#ffd166', 24);
+      addText(G.player.x, G.player.y - 104, '连杀 x' + G.combo, '#ffd166', 24);
     }
   }
 
@@ -560,6 +682,16 @@
     // ----- 技能 CD -----
     if (G.skillCd > 0) G.skillCd -= dt;
     if (p.castTimer > 0) p.castTimer -= dt;
+    if (p.atkTimer > 0) p.atkTimer -= dt;
+    if (p.hurtTimer > 0) p.hurtTimer -= dt;
+    if (G.slowTimer > 0) G.slowTimer -= dt;
+    if (G.overclockTimer > 0) G.overclockTimer -= dt;
+    if (G.goldBoostTimer > 0) G.goldBoostTimer -= dt;
+    if (G.shieldTimer > 0) G.shieldTimer -= dt;
+    for (let i = 0; i < G.softCds.length; i++) {
+      if (G.softCds[i] > 0) G.softCds[i] -= dt;
+      if (G.softFlash[i] > 0) G.softFlash[i] -= dt;
+    }
     if (G.buffs.timer > 0) { G.buffs.timer -= dt; if (G.buffs.timer <= 0) G.buffs.speed = 1; }
 
     // ----- 攻击 -----
@@ -595,7 +727,7 @@
 
     // ----- 生成敌人 -----
     if (!G.bossSpawned) {
-      const rate = 1.90 + G.wave * 0.62;
+      const rate = 2.10 + G.wave * 0.70;
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
@@ -620,7 +752,7 @@
       if (e.dead) continue;
       const dx = e.x - p.x, dy = e.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      const minD = e.r + 27;
+      const minD = e.r + 36;
       if (d < minD) {
         hitPlayer(e.dmg * 0.26);
         const k = (minD - d) * Math.min(1, dt * 10);
@@ -653,10 +785,12 @@
 
   function hitPlayer(dmg) {
     const p = G.player;
+    if (G.shieldTimer > 0) return;
     if (p.invuln > 0) return;
     p.hp -= dmg;
     p.invuln = 0.52;
     p.hitFlash = 0.22;
+    p.hurtTimer = 0.34;
     noiseBurst(0.16, 0.16, 900);
     blip(150, 0.16, 'sawtooth', 0.13, 70);
     addShake(4);
@@ -670,8 +804,9 @@
       if (e.dead) { G.enemies.splice(i, 1); continue; }
       const dx = p.x - e.x, dy = p.y - e.y;
       const d = Math.hypot(dx, dy) || 1;
-      e.x += (dx / d) * e.speed * dt;
-      e.y += (dy / d) * e.speed * dt;
+      const spdMul = G.slowTimer > 0 ? 0.45 : 1;
+      e.x += (dx / d) * e.speed * spdMul * dt;
+      e.y += (dy / d) * e.speed * spdMul * dt;
       e.t += dt * (e.isBoss ? 1.4 : 3.2);
       if (e.hit > 0) e.hit -= dt;
       if (e.isBoss) {
@@ -709,7 +844,7 @@
         const d2 = dx * dx + dy * dy;
         if (d2 > 0.01 && d2 < rr * rr) {
           const d = Math.sqrt(d2);
-          const push = (rr - d) * 0.28;
+          const push = (rr - d) * 0.34;
           const nx = dx / d, ny = dy / d;
           a.x -= nx * push; a.y -= ny * push;
           b.x += nx * push; b.y += ny * push;
@@ -801,7 +936,7 @@
           blip(760, 0.09, 'sine', 0.09, 1250);
           addText(p.x, p.y - 34, '+' + c.heal + ' HP', '#7dff9b', 15);
         } else {
-          G.gold += c.v;
+          G.gold += G.goldBoostTimer > 0 ? c.v * 2 : c.v;
           blip(1280, 0.05, 'sine', 0.07, 1900);
           addText(p.x, p.y - 34, '+' + c.v, '#ffd166', 14);
         }
@@ -880,16 +1015,28 @@
       return { kind, idx: G.ramIdx + 1, cost: n.cost, title: '内存升级', name: n.name,
         tag: '+' + (n.maxMana - ram().maxMana) + ' 蓝上限' };
     }
+    if (kind === 'software') {
+      const owned = new Set(G.softwares.map((x) => x.id));
+      const pool = SOFTWARES.filter((x) => !owned.has(x.id));
+      if (!pool.length) return null;
+      const sw = pool[(Math.random() * pool.length) | 0];
+      return { kind, sw, cost: sw.cost, title: '安装软件', name: sw.name, tag: sw.tag };
+    }
+    if (kind === 'ssd' && G.ssdIdx < SSDS.length - 1) {
+      const n = SSDS[G.ssdIdx + 1];
+      return { kind, idx: G.ssdIdx + 1, cost: n.cost, title: '固态扩容', name: n.name,
+        tag: '软件位 ' + SSDS[G.ssdIdx].slots + ' → ' + n.slots };
+    }
     return null;
   }
 
   function openShop() {
-    const cards = [makeCard('cpu'), makeCard('gpu'), makeCard('ram')].filter(Boolean);
+    const cards = [makeCard('cpu'), makeCard('gpu'), makeCard('ram'), makeCard('software'), makeCard('ssd')].filter(Boolean);
     if (!cards.length) { G.state = 'playing'; return; }
     G.state = 'shop';
     G.shopChosen = false;
     cards.sort(() => Math.random() - 0.5);
-    G.shopCards = cards.slice(0, 3);
+    G.shopCards = cards.slice(0, 5);
   }
 
   // 买完一件后只替换那一张，不重排整排
@@ -917,6 +1064,8 @@
       G.player.maxMana = ram().maxMana;
       G.player.mana += Math.max(0, G.player.maxMana - old) * 0.6;
     }
+    if (card.kind === 'software') equipSoftware(card.sw);
+    if (card.kind === 'ssd') G.ssdIdx = card.idx;
     G.shopChosen = true;
     blip(520, 0.1, 'square', 0.14, 900);
     blip(780, 0.16, 'sine', 0.1, 1200);
@@ -935,12 +1084,10 @@
     initAudio();
     if (G.state === 'menu') { resetGame(); return; }
     if (G.state === 'dead' || G.state === 'win') { resetGame(); return; }
-    if (G.state === 'shop') {
-      for (const b of G.uiButtons) {
-        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-          if (b.action) b.action();
-          return;
-        }
+    for (const b of G.uiButtons) {
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        if (b.action) b.action();
+        return;
       }
     }
   }
@@ -1063,6 +1210,10 @@
     const spdNow = Math.hypot(p.vx, p.vy);
     if (p.castTimer > 0 && ASSETS.fishCast && ASSETS.fishCast.complete) {
       img = ASSETS.fishCast;
+    } else if (p.hurtTimer > 0 && ASSETS.fishHurt && ASSETS.fishHurt.complete) {
+      img = ASSETS.fishHurt;
+    } else if (p.atkTimer > 0 && ASSETS.fishAtk && ASSETS.fishAtk.complete) {
+      img = ASSETS.fishAtk;
     } else if (spdNow > 40) {
       const alt = Math.floor(p.walk / 1.15) % 2 === 0 ? ASSETS.fishA : ASSETS.fishB;
       if (alt && alt.complete && alt.naturalWidth) img = alt;
@@ -1456,6 +1607,17 @@
         ctx.lineWidth = 4 * k;
         ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(ex, ey); ctx.stroke();
         ctx.restore();
+      } else if (f.type === 'ring') {
+        const kr = 1 - f.t / f.life;
+        f.r = lerp(f.r, f.maxR, 1 - Math.pow(0.0008, dt));
+        ctx.save();
+        ctx.globalAlpha = kr * 0.9;
+        ctx.strokeStyle = f.color;
+        ctx.lineWidth = 7 * kr + 1;
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = f.color;
+        ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.stroke();
+        ctx.restore();
       } else if (f.type === 'flame') {
         const k = 1 - f.t / f.life;
         ctx.save();
@@ -1501,6 +1663,7 @@
   // ----- HUD -----
   function drawHUD() {
     const p = G.player;
+    G.uiButtons.length = 0;
 
     // 左下：血条 + 蓝条
     const bx = 30, by = H - 92, bw = 300, bh = 16;
@@ -1585,6 +1748,8 @@
       ctx.beginPath(); ctx.roundRect(bx, byy, bw * clamp(boss.hp / boss.maxHp, 0, 1), 14, 5); ctx.fill();
     }
 
+    drawSoftwareBar();
+
     // 触控摇杆
     if (touch.active) {
       ctx.save();
@@ -1607,6 +1772,67 @@
       ctx.fillStyle = 'rgba(255,209,102,' + clamp(G.comboTimer, 0, 1) + ')';
       ctx.fillText('x' + G.combo, W / 2, 70);
     }
+  }
+
+  function drawSoftwareBar() {
+    const slots = SSDS[G.ssdIdx].slots;
+    const size = 62, gap = 12;
+    const totalW = slots * size + Math.max(0, slots - 1) * gap;
+    const x0 = W - 34 - totalW;
+    const y0 = H - 34 - size;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    for (let i = 0; i < slots; i++) {
+      const x = x0 + i * (size + gap);
+      const sw = G.softwares[i];
+      const cd = G.softCds[i] || 0;
+
+      ctx.fillStyle = sw ? 'rgba(14,24,44,0.92)' : 'rgba(10,16,30,0.65)';
+      ctx.strokeStyle = sw ? sw.color : 'rgba(90,110,140,0.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(x, y0, size, size, 10); ctx.fill(); ctx.stroke();
+
+      if (sw) {
+        if (G.softFlash[i] > 0) {
+          ctx.save();
+          ctx.globalAlpha = G.softFlash[i] * 1.6;
+          ctx.fillStyle = sw.color;
+          ctx.beginPath(); ctx.roundRect(x, y0, size, size, 10); ctx.fill();
+          ctx.restore();
+        }
+        if (cd > 0) {
+          const k = clamp(cd / sw.cd, 0, 1);
+          ctx.fillStyle = 'rgba(2,4,10,0.55)';
+          ctx.beginPath(); ctx.roundRect(x, y0, size, size, 10); ctx.fill();
+          // 底部进度条显示冷却
+          ctx.fillStyle = 'rgba(142,242,255,0.85)';
+          ctx.fillRect(x + 6, y0 + size - 8, (size - 12) * (1 - k), 4);
+        }
+        const half = Math.ceil(sw.name.length / 2);
+        ctx.fillStyle = cd > 0 ? 'rgba(210,225,245,0.85)' : '#eaf3ff';
+        ctx.font = 'bold 15px ' + FONT;
+        ctx.fillText(sw.name.slice(0, half), x + size / 2, y0 + size / 2 - 5);
+        ctx.font = '12px ' + FONT;
+        ctx.fillStyle = sw.color;
+        ctx.fillText(sw.name.slice(half), x + size / 2, y0 + size / 2 + 13);
+
+        if (cd > 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.font = 'bold 15px ' + FONT;
+          ctx.fillText(Math.ceil(cd) + 's', x + size / 2, y0 + size - 15);
+        }
+        ctx.fillStyle = 'rgba(150,190,240,0.55)';
+        ctx.font = 'bold 10px ' + FONT;
+        ctx.fillText(String(i + 1), x + 9, y0 + 12);
+      } else {
+        ctx.fillStyle = 'rgba(140,170,210,0.35)';
+        ctx.font = 'bold 24px ' + FONT;
+        ctx.fillText('+', x + size / 2, y0 + size / 2 + 2);
+      }
+      G.uiButtons.push({ x, y: y0, w: size, h: size, action: () => useSoftware(i) });
+    }
+    ctx.restore();
   }
 
   // ----- 菜单 -----
@@ -1665,12 +1891,15 @@
     ctx.fillText('第 ' + Math.max(1, G.wave - 1) + ' 波结束 · 装机时间', W / 2, 92);
     ctx.font = 'bold 16px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('◈ 金币 ' + G.gold + '   ·   选一件，或者空手走人', W / 2, 128);
+    ctx.fillText('◈ 金币 ' + G.gold + '   ·   钱够就能连买，买完点下面继续', W / 2, 128);
 
     G.uiButtons.length = 0;
     const cards = G.shopCards;
-    const cw = 308, chh = 372, gap = 30;
-    const totalW = cards.length * cw + (cards.length - 1) * gap;
+    const gap = 24;
+    const cw = Math.min(300, (W - 120 - gap * Math.max(0, cards.length - 1)) / Math.max(1, cards.length));
+    const chh = 372;
+    const sc = cw / 300;
+    const totalW = cards.length * cw + Math.max(0, cards.length - 1) * gap;
     let x0 = W / 2 - totalW / 2;
 
     for (const c of cards) {
@@ -1694,11 +1923,11 @@
       ctx.fillStyle = col;
       ctx.fillText(c.title, x0 + cw / 2, y0 + 34);
 
-      drawShopIcon(c, x0 + cw / 2, y0 + 112, 120);
+      drawShopIcon(c, x0 + cw / 2, y0 + 112, Math.min(120, cw * 0.56));
 
-      ctx.font = 'bold 21px ' + FONT;
+      ctx.font = 'bold ' + Math.round(21 * Math.max(0.72, sc)) + 'px ' + FONT;
       ctx.fillStyle = '#eaf3ff';
-      ctx.fillText(c.name, x0 + cw / 2, y0 + 204);
+      wrapText(c.name, x0 + cw / 2, y0 + 204, cw - 26, 24);
 
       ctx.font = 'bold 14px ' + FONT;
       ctx.fillStyle = 'rgba(180,205,235,0.85)';
@@ -1747,6 +1976,55 @@
   }
 
   function drawShopIcon(c, cx, cy, size) {
+    if (c.kind === 'software') {
+      const col = c.sw.color;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.shadowBlur = 16;
+      ctx.shadowColor = col;
+      ctx.fillStyle = 'rgba(12,22,44,0.95)';
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(-46, -46, 92, 92, 12); ctx.fill(); ctx.stroke();
+      ctx.shadowBlur = 0;
+      // 窗口三条杠
+      ctx.fillStyle = col;
+      ctx.globalAlpha = 0.75;
+      ctx.beginPath(); ctx.roundRect(-32, -32, 64, 12, 4); ctx.fill();
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath(); ctx.roundRect(-32, -14, 64, 9, 4); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(-32, 1, 44, 9, 4); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.font = 'bold 17px ' + FONT;
+      ctx.fillStyle = col;
+      ctx.textAlign = 'center';
+      ctx.fillText('SW', 0, 33);
+      ctx.restore();
+      return;
+    }
+    if (c.kind === 'ssd') {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = '#8ef2ff';
+      ctx.fillStyle = '#1a2740';
+      ctx.strokeStyle = '#8ef2ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.roundRect(-60, -38, 120, 76, 8); ctx.fill(); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#2f4062';
+      ctx.beginPath(); ctx.roundRect(-48, -26, 70, 52, 4); ctx.fill();
+      ctx.fillStyle = '#8ef2ff';
+      ctx.globalAlpha = 0.8;
+      for (let i = 0; i < 3; i++) { ctx.fillRect(30, -20 + i * 14, 16, 8); }
+      ctx.globalAlpha = 1;
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = '#cfe9ff';
+      ctx.textAlign = 'center';
+      ctx.fillText('SSD', -13, 6);
+      ctx.restore();
+      return;
+    }
     if (c.kind === 'gpu') {
       const img = ASSETS['gpu_' + c.idx];
       if (img && img.complete && img.naturalWidth) {
