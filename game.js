@@ -93,6 +93,7 @@
     if (e.code === 'KeyR') game.restart();
     if (e.code === 'KeyM') { AC.muted = !AC.muted; SaveData.muted = AC.muted; persistSave(); }
     if (e.code === 'KeyP' || e.code === 'Escape') { togglePause(); }
+    if (e.code === 'KeyT') { cycleSpeed(); }
     // 只有战斗中才响应软件快捷键，避免在商店/结算/暂停界面白烧冷却
     if (G.state === 'playing' && !G.paused) {
       if (e.code === 'Space') { useSoftware(0); }
@@ -462,6 +463,7 @@
   const G = {
     state: 'menu',          // menu | playing | shop | dead | win
     paused: false,
+    speedMul: 1,            // 1 / 2 / 4 倍速
     t: 0,
     fps: 60,
 
@@ -522,6 +524,7 @@
   function resetGame() {
     G.state = 'playing';
     G.paused = false;
+    G.speedMul = 1;
     G.t = 0;
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
@@ -1314,6 +1317,14 @@
     blip(SaveData.showHitbox ? 980 : 620, 0.06, 'sine', 0.07, SaveData.showHitbox ? 1300 : 420);
   }
 
+  // 1× -> 2× -> 4× -> 1×
+  function cycleSpeed() {
+    if (G.state !== 'playing') return;
+    G.speedMul = G.speedMul === 1 ? 2 : G.speedMul === 2 ? 4 : 1;
+    const f = G.speedMul === 1 ? 520 : G.speedMul === 2 ? 660 : 880;
+    blip(f, 0.06, 'sine', 0.07, f * 1.4);
+  }
+
   function startNewGame() {
     SaveData.run = null;
     persistSave();
@@ -2081,23 +2092,41 @@
     ctx.fillStyle = '#8ef2ff';
     ctx.beginPath(); ctx.roundRect(34, 90, pwid * clamp(G.waveTime / G.WAVE_LEN, 0, 1), 6, 3); ctx.fill();
 
-    // 右上：装备
+    // 右上：装备名称 + 属性
+    const rx = W - 30;
     ctx.textAlign = 'right';
+
     ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('CPU  ' + cpu().name, W - 30, 42);
+    ctx.fillText('CPU  ' + cpu().name, rx, 38);
+    const c0 = cpu();
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText('射速 ' + (1 / c0.interval).toFixed(1) + '/s · 伤害 ' + c0.dmg + ' · 弹道 ' + c0.count + (c0.pierce ? ' · 穿透 ' + c0.pierce : ''), rx, 56);
+
+    ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = gpu().color;
-    ctx.fillText('GPU  ' + gpu().name, W - 30, 66);
+    ctx.fillText('GPU  ' + gpu().name, rx, 78);
+    const g0 = gpu();
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText(g0.skill ? (SKILL_NAMES[g0.skill] + ' · 蓝耗 ' + g0.mana + ' · 冷却 ' + g0.cd.toFixed(1) + 's') : '无技能（纯亮机）', rx, 96);
+
+    ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('RAM  ' + ram().name, W - 30, 90);
+    ctx.fillText('RAM  ' + ram().name, rx, 118);
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText('蓝上限 ' + ram().maxMana + ' · 回蓝 ' + ram().regen + '/s', rx, 136);
 
     // 技能就绪状态
     if (gpu().skill) {
       const ready = G.skillCd <= 0 && p.mana >= gpu().mana;
-      ctx.fillStyle = ready ? '#ffd166' : 'rgba(160,180,210,0.5)';
-      ctx.font = 'bold 14px ' + FONT;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = ready ? '#ffd166' : 'rgba(160,180,210,0.55)';
+      ctx.font = 'bold 13px ' + FONT;
       const cdTxt = G.skillCd > 0 ? '冷却 ' + G.skillCd.toFixed(1) + 's' : (p.mana < gpu().mana ? '蓝不够' : '技能就绪');
-      ctx.fillText(gpu().tag + ' · ' + cdTxt, W - 30, 116);
+      ctx.fillText('技能 ' + cdTxt, rx, 158);
     }
 
     // Boss 血条（屏幕空间）
@@ -2145,7 +2174,7 @@
 
     // 右上角暂停按钮（手机只有触屏，得能点得到）
     const pbSize = 46;
-    const pbx = W - 30 - pbSize, pby = 128;
+    const pbx = W - 30 - pbSize, pby = 176;
     const pbHover = mouse.x > pbx && mouse.x < pbx + pbSize && mouse.y > pby && mouse.y < pby + pbSize;
     ctx.fillStyle = pbHover ? 'rgba(32,58,88,0.95)' : 'rgba(14,24,44,0.82)';
     ctx.strokeStyle = 'rgba(142,242,255,0.5)';
@@ -2159,6 +2188,22 @@
     ctx.textAlign = 'center';
     ctx.fillText('P', pbx + pbSize / 2, pby + pbSize - 7);
     G.uiButtons.push({ x: pbx, y: pby, w: pbSize, h: pbSize, action: togglePause });
+
+    // 暂停下面的倍速按钮：1× → 2× → 4×
+    const spy = pby + pbSize + 10;
+    const spHover = mouse.x > pbx && mouse.x < pbx + pbSize && mouse.y > spy && mouse.y < spy + pbSize;
+    const fast = G.speedMul > 1;
+    ctx.fillStyle = fast ? (spHover ? 'rgba(84,62,18,0.95)' : 'rgba(48,36,12,0.85)') : (spHover ? 'rgba(32,58,88,0.95)' : 'rgba(14,24,44,0.82)');
+    ctx.strokeStyle = fast ? 'rgba(255,209,102,0.8)' : 'rgba(142,242,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(pbx, spy, pbSize, pbSize, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = fast ? '#ffd166' : '#cfe3ff';
+    ctx.font = 'bold 18px ' + FONT;
+    ctx.fillText(G.speedMul + '×', pbx + pbSize / 2, spy + pbSize / 2 - 3);
+    ctx.font = 'bold 10px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.65)';
+    ctx.fillText('T', pbx + pbSize / 2, spy + pbSize - 7);
+    G.uiButtons.push({ x: pbx, y: spy, w: pbSize, h: pbSize, action: cycleSpeed });
   }
 
   function drawSoftwareBar() {
@@ -2714,7 +2759,9 @@
     if (!isFinite(dt) || dt < 0) dt = 0;
     dt = Math.min(dt, 1 / 30);
 
-    update(dt);
+    // 倍速：多跑几次固定步长的 update，而不是把 dt 放大，避免子弹/碰撞穿透
+    const steps = G.speedMul || 1;
+    for (let i = 0; i < steps; i++) update(dt);
     draw(dt);
 
     requestAnimationFrame(loop);
