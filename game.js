@@ -14,6 +14,7 @@
   const pick = (arr) => arr[(Math.random() * arr.length) | 0];
   const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
   const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+  const FONT_MONO = 'Consolas,"Courier New",monospace';
 
   // ---------------- 场地 ----------------
   const ARENA = { w: 2300, h: 1500 };
@@ -253,19 +254,37 @@
     boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
+  // ---------------- 难度 ----------------
+  // 只改怪物伤害；简单 = 原来的数值
+  const DIFFS = {
+    easy:   { name: '简单', dmg: 1.0, color: '#7dffd4' },
+    normal: { name: '普通', dmg: 1.5, color: '#8ef2ff' },
+    hard:   { name: '困难', dmg: 2.0, color: '#ff8ad8' },
+  };
+  const DIFF_KEYS = ['easy', 'normal', 'hard'];
+  function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
+  function diffDamageMul() { return diffOf(G.difficulty).dmg; }
+
   // ---------------- 本地存档（localStorage + 哈希校验） ----------------
-  // 设置 + 统计 + 每波开始时的进度存档；导出/导入带 FNV-1a 校验
+  // 设置 + 分难度统计 + 每波开始时的进度存档；导出/导入带 FNV-1a 校验
   const SAVE_KEY = 'kuangku.save.v1';
   const SAVE_VERSION = 1;
+
+  function emptyStats() {
+    return { bestWave: 0, bestKills: 0, bestTime: 0, runs: 0, totalKills: 0, totalTime: 0 };
+  }
+
   const SaveData = {
     showHitbox: true,
     muted: false,
+    difficulty: 'easy',
     bestWave: 0,
     bestKills: 0,
     bestTime: 0,
     runs: 0,
     totalKills: 0,
     totalTime: 0,
+    stats: { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() },
     run: null,
   };
 
@@ -289,13 +308,25 @@
   function resetSaveData() {
     SaveData.showHitbox = true;
     SaveData.muted = false;
+    SaveData.difficulty = 'easy';
     SaveData.bestWave = 0;
     SaveData.bestKills = 0;
     SaveData.bestTime = 0;
     SaveData.runs = 0;
     SaveData.totalKills = 0;
     SaveData.totalTime = 0;
+    SaveData.stats = { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() };
     SaveData.run = null;
+  }
+
+  function adoptStats(dst, src) {
+    if (!src || typeof src !== 'object') return;
+    if (typeof src.bestWave === 'number') dst.bestWave = clamp(Math.round(src.bestWave), 0, G.TOTAL_WAVES);
+    if (typeof src.bestKills === 'number') dst.bestKills = Math.max(0, Math.round(src.bestKills));
+    if (typeof src.bestTime === 'number') dst.bestTime = Math.max(0, src.bestTime);
+    if (typeof src.runs === 'number') dst.runs = Math.max(0, Math.round(src.runs));
+    if (typeof src.totalKills === 'number') dst.totalKills = Math.max(0, Math.round(src.totalKills));
+    if (typeof src.totalTime === 'number') dst.totalTime = Math.max(0, src.totalTime);
   }
 
   function adoptSaveData(data, replace) {
@@ -309,6 +340,18 @@
     if (typeof data.runs === 'number') SaveData.runs = Math.max(0, Math.round(data.runs));
     if (typeof data.totalKills === 'number') SaveData.totalKills = Math.max(0, Math.round(data.totalKills));
     if (typeof data.totalTime === 'number') SaveData.totalTime = Math.max(0, data.totalTime);
+    if (typeof data.difficulty === 'string' && DIFFS[data.difficulty]) SaveData.difficulty = data.difficulty;
+    if (data.stats && typeof data.stats === 'object') {
+      for (const k of DIFF_KEYS) {
+        if (data.stats[k]) adoptStats(SaveData.stats[k], data.stats[k]);
+      }
+    } else if (SaveData.bestWave > 0 || SaveData.runs > 0) {
+      // 旧存档没有分难度统计：当时的难度就是简单
+      SaveData.stats.easy = {
+        bestWave: SaveData.bestWave, bestKills: SaveData.bestKills, bestTime: SaveData.bestTime,
+        runs: SaveData.runs, totalKills: SaveData.totalKills, totalTime: SaveData.totalTime,
+      };
+    }
     if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
   }
 
@@ -344,6 +387,7 @@
     if (G.state !== 'playing' || !G.player) return;
     SaveData.run = {
       wave: G.wave,
+      difficulty: G.difficulty,
       gold: G.gold,
       hp: Math.max(1, Math.round(G.player.hp)),
       mana: Math.round(G.player.mana),
@@ -358,14 +402,19 @@
     persistSave();
   }
 
-  // 一局结束：刷新最高纪录/累计统计，并清掉进度存档
+  // 一局结束：总计和当前难度各记一笔，并清掉进度存档
+  function bumpStats(s) {
+    s.runs = (s.runs || 0) + 1;
+    s.totalKills = (s.totalKills || 0) + G.kills;
+    s.totalTime = (s.totalTime || 0) + G.playTime;
+    if (G.wave > (s.bestWave || 0)) s.bestWave = G.wave;
+    if (G.kills > (s.bestKills || 0)) s.bestKills = G.kills;
+    if (G.playTime > (s.bestTime || 0)) s.bestTime = G.playTime;
+  }
+
   function recordRun() {
-    SaveData.runs++;
-    SaveData.totalKills += G.kills;
-    SaveData.totalTime += G.playTime;
-    if (G.wave > SaveData.bestWave) SaveData.bestWave = G.wave;
-    if (G.kills > SaveData.bestKills) SaveData.bestKills = G.kills;
-    if (G.playTime > SaveData.bestTime) SaveData.bestTime = G.playTime;
+    bumpStats(SaveData);
+    bumpStats(SaveData.stats[G.difficulty] || SaveData.stats.easy);
     SaveData.run = null;
     persistSave();
   }
@@ -464,6 +513,7 @@
     state: 'menu',          // menu | playing | shop | dead | win
     paused: false,
     speedMul: 1,            // 1 / 2 / 4 倍速
+    difficulty: 'easy',     // easy | normal | hard
     t: 0,
     fps: 60,
 
@@ -525,6 +575,7 @@
     G.state = 'playing';
     G.paused = false;
     G.speedMul = 1;
+    G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
     G.t = 0;
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
@@ -571,7 +622,7 @@
       type, x, y,
       hp: d.hp * hpMul, maxHp: d.hp * hpMul,
       speed: d.speed * rnd(1.16, 0.86),
-      dmg: d.dmg * dmgMul,
+      dmg: d.dmg * dmgMul * diffDamageMul(),
       r: d.r,
       color: d.color,
       gold: d.gold,
@@ -1039,7 +1090,7 @@
             const a = (k / 14) * TAU + e.phase;
             G.ebullets.push({
               x: e.x, y: e.y, vx: Math.cos(a) * 250, vy: Math.sin(a) * 250,
-              r: 9, dmg: 9, life: 5, color: '#ff3b3b',
+              r: 9, dmg: 9 * diffDamageMul(), life: 5, color: '#ff3b3b',
             });
           }
           e.phase += 0.4;
@@ -1331,6 +1382,14 @@
     resetGame();
   }
 
+  function setDifficulty(key) {
+    if (G.state !== 'menu' || !DIFFS[key] || SaveData.difficulty === key) return;
+    SaveData.difficulty = key;
+    persistSave();
+    const f = key === 'hard' ? 880 : key === 'normal' ? 660 : 520;
+    blip(f, 0.06, 'sine', 0.07, f * 1.3);
+  }
+
   // 暂停里返回主界面：保留「每波开始」的进度存档，不额外覆盖
   function backToMenu() {
     if (G.state !== 'playing') return;
@@ -1344,6 +1403,7 @@
     const r = SaveData.run;
     if (!r) { startNewGame(); return; }
     resetGame();
+    G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
     G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
     G.waveTime = 0;
     G.gold = Math.max(0, Math.round(r.gold) || 0);
@@ -2080,7 +2140,13 @@
     ctx.textAlign = 'left';
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#8ef2ff';
-    ctx.fillText('WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES, 34, 46);
+    const waveTxt = 'WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES;
+    ctx.fillText(waveTxt, 34, 46);
+    const curDiff = diffOf(G.difficulty);
+    const waveW = ctx.measureText(waveTxt).width;
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = curDiff.color;
+    ctx.fillText(curDiff.name, 34 + waveW + 10, 48);
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#ffd166';
     ctx.fillText('◈ ' + G.gold, 34, 76);
@@ -2091,6 +2157,15 @@
     ctx.beginPath(); ctx.roundRect(34, 90, pwid, 6, 3); ctx.fill();
     ctx.fillStyle = '#8ef2ff';
     ctx.beginPath(); ctx.roundRect(34, 90, pwid * clamp(G.waveTime / G.WAVE_LEN, 0, 1), 6, 3); ctx.fill();
+
+    // 局内计时（毫秒级，方便凹时间）
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.8)';
+    ctx.fillText('TIME', 34, 119);
+    ctx.font = 'bold 19px ' + FONT_MONO;
+    ctx.fillStyle = '#cfe3ff';
+    ctx.fillText(fmtRunTime(G.playTime), 74, 121);
 
     // 右上：装备名称 + 属性
     const rx = W - 30;
@@ -2284,7 +2359,7 @@
 
     ctx.font = 'bold 17px ' + FONT;
     ctx.fillStyle = 'rgba(190,215,255,0.82)';
-    ctx.fillText('第 ' + G.wave + ' 波 · 击杀 ' + G.kills + ' · ◈ ' + G.gold + ' · 用时 ' + Math.floor(G.playTime) + ' 秒', W / 2, H / 2 - 22);
+    ctx.fillText('难度 ' + diffOf(G.difficulty).name + ' · 第 ' + G.wave + ' 波 · 击杀 ' + G.kills + ' · ◈ ' + G.gold + ' · 用时 ' + fmtRunTime(G.playTime), W / 2, H / 2 - 22);
 
     const bw = 220, bh = 52, bx = W / 2 - bw / 2, by = H / 2 + 24;
     const hov = mouse.x > bx && mouse.x < bx + bw && mouse.y > by && mouse.y < by + bh;
@@ -2367,38 +2442,36 @@
     const g = ctx.createLinearGradient(W / 2 - 260, 0, W / 2 + 260, 0);
     g.addColorStop(0, '#7dffd4'); g.addColorStop(0.5, '#8ef2ff'); g.addColorStop(1, '#ff8ad8');
     ctx.fillStyle = g;
-    ctx.fillText('大肥鱼的狂野矿卡', W / 2, H / 2 - 120);
+    ctx.fillText('大肥鱼的狂野矿卡', W / 2, H / 2 - 130);
     ctx.shadowBlur = 0;
 
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = 'rgba(190,215,255,0.75)';
-    ctx.fillText('1024 程序员节 · 用一张显卡的命，换一整晚的帧数', W / 2, H / 2 - 66);
+    ctx.fillText('1024 程序员节 · 用一张显卡的命，换一整晚的帧数', W / 2, H / 2 - 80);
 
     ctx.font = 'bold 16px ' + FONT;
     ctx.fillStyle = 'rgba(185,205,235,0.9)';
-    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 + 8);
+    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 - 20);
     ctx.fillStyle = 'rgba(165,190,225,0.85)';
-    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 34);
+    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 4);
 
-    // 统计：最高纪录 + 累计
-    ctx.font = 'bold 14px ' + FONT;
-    if (SaveData.bestWave > 0) {
-      ctx.fillStyle = 'rgba(255,209,102,0.92)';
-      ctx.fillText('纪录 第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills + ' · 存活 ' + fmtClock(SaveData.bestTime), W / 2, H / 2 + 64);
-      ctx.fillStyle = 'rgba(170,195,230,0.8)';
-      ctx.fillText('累计 ' + SaveData.runs + ' 局 · 击杀 ' + SaveData.totalKills + ' · 时长 ' + fmtClock(SaveData.totalTime), W / 2, H / 2 + 86);
-    } else {
-      ctx.fillStyle = 'rgba(170,195,230,0.8)';
-      ctx.fillText('还没有纪录，先打一局吧', W / 2, H / 2 + 64);
-    }
+    // 难度选择（只影响怪物伤害）
+    drawDifficultyButtons(H / 2 + 28);
+
+    // 分难度统计 + 总计
+    drawMenuStats(H / 2 + 84);
 
     const hasRun = !!(SaveData.run && SaveData.run.wave);
-    const btnY = H / 2 + 108;
+    const btnY = H / 2 + 180;
     if (hasRun) {
-      drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 150, btnY, 300, 52, '#8ef2ff', resumeSavedRun);
-      drawMenuButton('新开一局', W / 2 - 150, btnY + 62, 300, 52, 'rgba(190,215,255,0.75)', startNewGame);
+      const rd = diffOf(SaveData.run.difficulty);
+      ctx.font = 'bold 12px ' + FONT;
+      ctx.fillStyle = 'rgba(170,195,230,0.75)';
+      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（伤害 ×' + rd.dmg.toFixed(1) + '）', W / 2, btnY - 18);
+      drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 198, btnY, 190, 50, '#8ef2ff', resumeSavedRun);
+      drawMenuButton('新开一局', W / 2 + 8, btnY, 190, 50, 'rgba(190,215,255,0.75)', startNewGame);
     } else {
-      drawMenuButton('开始游戏', W / 2 - 150, btnY, 300, 52, '#8ef2ff', startNewGame);
+      drawMenuButton('开始游戏', W / 2 - 150, btnY, 300, 50, '#8ef2ff', startNewGame);
     }
 
     // 存档导出 / 导入
@@ -2414,13 +2487,64 @@
 
     ctx.font = '14px ' + FONT;
     ctx.fillStyle = 'rgba(120,140,170,0.7)';
-    ctx.fillText('v0.9.1 · 1024 程序员节', W / 2, H - 36);
+    ctx.fillText('v0.9.1 · 1024 程序员节', W / 2, H - 30);
+  }
+
+  function drawDifficultyButtons(y) {
+    const bw = 116, gap = 10;
+    const total = bw * DIFF_KEYS.length + gap * (DIFF_KEYS.length - 1);
+    let x = W / 2 - total / 2;
+    for (const key of DIFF_KEYS) {
+      const d = DIFFS[key];
+      const sel = SaveData.difficulty === key;
+      const hov = mouse.x > x && mouse.x < x + bw && mouse.y > y && mouse.y < y + 40;
+      ctx.fillStyle = sel ? d.color : (hov ? 'rgba(24,42,66,0.95)' : 'rgba(14,26,44,0.85)');
+      ctx.strokeStyle = sel ? d.color : 'rgba(120,150,190,0.5)';
+      ctx.lineWidth = sel ? 2 : 1.2;
+      ctx.beginPath(); ctx.roundRect(x, y, bw, 40, 9); ctx.fill(); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 15px ' + FONT;
+      ctx.fillStyle = sel ? '#04121a' : d.color;
+      ctx.fillText(d.name, x + bw / 2, y + 15);
+      ctx.font = 'bold 11px ' + FONT;
+      ctx.fillStyle = sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)';
+      ctx.fillText('伤害 ×' + d.dmg.toFixed(1), x + bw / 2, y + 31);
+      G.uiButtons.push({ x, y, w: bw, h: 40, action: () => setDifficulty(key) });
+      x += bw + gap;
+    }
+  }
+
+  function drawMenuStats(y) {
+    ctx.textAlign = 'center';
+    for (let i = 0; i < DIFF_KEYS.length; i++) {
+      const key = DIFF_KEYS[i];
+      const d = DIFFS[key];
+      const s = SaveData.stats[key] || emptyStats();
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = s.runs > 0 ? d.color : 'rgba(140,160,190,0.55)';
+      const txt = s.runs > 0
+        ? d.name + '  第 ' + s.bestWave + ' 波 · ' + s.bestKills + ' 杀 · ' + fmtClock(s.bestTime)
+        : d.name + '  还没打过';
+      ctx.fillText(txt, W / 2, y + i * 21);
+    }
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(255,209,102,0.85)';
+    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + 3 * 21);
   }
 
   function fmtClock(sec) {
     sec = Math.max(0, Math.floor(sec || 0));
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
     return (h > 0 ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // 局内计时：mm:ss.cc，专门给凹时间的玩家看
+  function fmtRunTime(sec) {
+    sec = Math.max(0, sec || 0);
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const cs = Math.floor((sec * 100) % 100);
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s + '.' + (cs < 10 ? '0' : '') + cs;
   }
 
   function drawSmallButton(label, x, y, w, h, action) {
@@ -2712,15 +2836,16 @@
     ctx.fillStyle = 'rgba(210,200,220,0.85)';
     ctx.fillText('你的矿卡烧了，但数据还在硬盘里', W / 2, H / 2 - 60);
 
+    const dd = diffOf(G.difficulty);
+    const dr = SaveData.stats[G.difficulty] || emptyStats();
     ctx.font = 'bold 20px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    const sec = Math.floor(G.playTime);
-    ctx.fillText('坚持 ' + Math.floor(sec / 60) + ' 分 ' + (sec % 60) + ' 秒   ·   第 ' + G.wave + ' 波', W / 2, H / 2 + 10);
+    ctx.fillText('难度 ' + dd.name + ' · 坚持 ' + fmtRunTime(G.playTime) + '   ·   第 ' + G.wave + ' 波', W / 2, H / 2 + 10);
     ctx.fillText('击杀 ' + G.kills + '   ·   总伤害 ' + Math.floor(G.damageDealt), W / 2, H / 2 + 48);
 
     ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = 'rgba(255,209,102,0.9)';
-    ctx.fillText('最高纪录：第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills, W / 2, H / 2 + 86);
+    ctx.fillText('本难度纪录：第 ' + dr.bestWave + ' 波 · 击杀 ' + dr.bestKills, W / 2, H / 2 + 86);
 
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
@@ -2740,12 +2865,14 @@
     ctx.font = 'bold 20px ' + FONT;
     ctx.fillStyle = 'rgba(210,235,255,0.9)';
     ctx.fillText('双芯核弹被你打回废品站，这波不亏', W / 2, H / 2 - 50);
+    const dd = diffOf(G.difficulty);
+    const dr = SaveData.stats[G.difficulty] || emptyStats();
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('用时 ' + Math.floor(G.playTime / 60) + ' 分 ' + Math.floor(G.playTime % 60) + ' 秒   ·   击杀 ' + G.kills, W / 2, H / 2 + 20);
+    ctx.fillText('难度 ' + dd.name + ' · 用时 ' + fmtRunTime(G.playTime) + '   ·   击杀 ' + G.kills, W / 2, H / 2 + 20);
     ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = 'rgba(255,209,102,0.9)';
-    ctx.fillText('最高纪录：第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills, W / 2, H / 2 + 58);
+    ctx.fillText('本难度纪录：第 ' + dr.bestWave + ' 波 · 击杀 ' + dr.bestKills, W / 2, H / 2 + 58);
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
     ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 120);
