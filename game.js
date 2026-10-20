@@ -43,6 +43,7 @@
   const AC = { ctx: null, master: null, muted: false, lastShot: 0 };
 
   function initAudio() {
+    applyBgm(); // 首次点击/触摸时开始播放背景音乐（绕过自动播放限制）
     if (AC.ctx) { if (AC.ctx.state === 'suspended') AC.ctx.resume(); return; }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
@@ -82,6 +83,97 @@
     g.gain.value = vol === undefined ? 0.18 : vol;
     src.connect(f); f.connect(g); g.connect(AC.master);
     src.start(t);
+  }
+
+  // ---------------- 背景音乐（设置单独存，不放进游戏存档） ----------------
+  const AUDIO_KEY = 'kuangku.audio.v1';
+  const BGM = { el: null, enabled: true, volume: 0.5 };
+  const audioSlider = { x: 0, y: 0, w: 0, h: 0 };
+  let audioDragging = false;
+
+  function loadAudioSettings() {
+    try {
+      const raw = window.localStorage.getItem(AUDIO_KEY);
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return;
+      if (typeof o.enabled === 'boolean') BGM.enabled = o.enabled;
+      if (typeof o.volume === 'number') BGM.volume = clamp(o.volume, 0, 1);
+    } catch (e) { /* 隐私模式忽略 */ }
+  }
+
+  function saveAudioSettings() {
+    try {
+      window.localStorage.setItem(AUDIO_KEY, JSON.stringify({ enabled: BGM.enabled, volume: BGM.volume }));
+    } catch (e) { /* 同上 */ }
+  }
+
+  function initBgm() {
+    if (BGM.el) return BGM.el;
+    try {
+      const a = new Audio('assets/bgm.mp3');
+      a.loop = true;
+      a.preload = 'auto';
+      a.volume = BGM.volume;
+      BGM.el = a;
+    } catch (e) { BGM.el = null; }
+    return BGM.el;
+  }
+
+  function applyBgm() {
+    const a = initBgm();
+    if (!a) return;
+    a.volume = BGM.volume;
+    if (!BGM.enabled) { a.pause(); return; }
+    if (a.paused) {
+      const p = a.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  }
+
+  function toggleMusic() {
+    BGM.enabled = !BGM.enabled;
+    saveAudioSettings();
+    applyBgm();
+    blip(BGM.enabled ? 880 : 520, 0.06, 'sine', 0.07, BGM.enabled ? 1200 : 360);
+  }
+
+  function setMusicVolume(v, persist) {
+    BGM.volume = clamp(v, 0, 1);
+    if (BGM.el) BGM.el.volume = BGM.volume;
+    if (persist) saveAudioSettings();
+  }
+
+  // 主界面和暂停界面共用的音乐开关 + 音量条
+  function drawAudioControls(x, y) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(190,215,245,0.9)';
+    ctx.fillText('音乐', x, y);
+
+    const sw = 44, sh = 20, sx = x + 42, sy = y - sh / 2;
+    ctx.fillStyle = BGM.enabled ? 'rgba(80,220,255,0.9)' : 'rgba(70,90,120,0.75)';
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, sh / 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(sx + (BGM.enabled ? sw - sh / 2 : sh / 2), y, sh / 2 - 3, 0, TAU); ctx.fill();
+    G.uiButtons.push({ x: sx - 6, y: sy - 6, w: sw + 12, h: sh + 12, action: toggleMusic });
+
+    const tx = x + 104, tw = 132;
+    ctx.fillStyle = 'rgba(60,80,110,0.85)';
+    ctx.beginPath(); ctx.roundRect(tx, y - 3, tw, 6, 3); ctx.fill();
+    ctx.fillStyle = 'rgba(142,242,255,0.9)';
+    ctx.beginPath(); ctx.roundRect(tx, y - 3, tw * BGM.volume, 6, 3); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(tx + tw * BGM.volume, y, 6, 0, TAU); ctx.fill();
+    ctx.font = 'bold 11px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.75)';
+    ctx.fillText(Math.round(BGM.volume * 100) + '%', tx + tw + 8, y);
+
+    audioSlider.x = tx;
+    audioSlider.y = y - 10;
+    audioSlider.w = tw;
+    audioSlider.h = 20;
   }
 
   // ---------------- 输入 ----------------
@@ -125,6 +217,7 @@
   canvas.addEventListener('mousemove', (e) => {
     const p = toLogical(e.clientX, e.clientY);
     mouse.x = p.x; mouse.y = p.y;
+    if (audioDragging && audioSlider.w > 0) setMusicVolume((p.x - audioSlider.x) / audioSlider.w, false);
   });
   canvas.addEventListener('mousedown', (e) => {
     mouse.down = true;
@@ -132,7 +225,10 @@
     mouse.x = p.x; mouse.y = p.y;
     game.click(p.x, p.y);
   });
-  window.addEventListener('mouseup', () => { mouse.down = false; });
+  window.addEventListener('mouseup', () => {
+    mouse.down = false;
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
+  });
 
   // ---------------- 触控（移动端） ----------------
   const touch = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0, dx: 0, dy: 0, mag: 0 };
@@ -142,6 +238,12 @@
     initAudio();
     const t = e.changedTouches[0];
     const p = toLogical(t.clientX, t.clientY);
+    if (audioSlider.w > 0 && p.x >= audioSlider.x - 6 && p.x <= audioSlider.x + audioSlider.w + 6 &&
+        p.y >= audioSlider.y && p.y <= audioSlider.y + audioSlider.h) {
+      setMusicVolume((p.x - audioSlider.x) / audioSlider.w, true);
+      audioDragging = true;
+      return;
+    }
     if (G.state !== 'playing') {
       game.click(p.x, p.y);
       return;
@@ -161,6 +263,11 @@
 
   canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
+    if (audioDragging && audioSlider.w > 0) {
+      const t0 = e.changedTouches[0];
+      if (t0) setMusicVolume((toLogical(t0.clientX, t0.clientY).x - audioSlider.x) / audioSlider.w, false);
+      return;
+    }
     for (const t of e.changedTouches) {
       if (t.identifier !== touch.id) continue;
       const p = toLogical(t.clientX, t.clientY);
@@ -179,6 +286,7 @@
 
   canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
     for (const t of e.changedTouches) {
       if (t.identifier === touch.id) {
         touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
@@ -186,6 +294,7 @@
     }
   }, { passive: false });
   canvas.addEventListener('touchcancel', () => {
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
     touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
   }, { passive: false });
 
@@ -1531,6 +1640,13 @@
   // ---------------- 点击 ----------------
   function click(x, y) {
     initAudio();
+    // 音量条不是普通按钮：点一下定音量，按住还能拖
+    if (audioSlider.w > 0 && x >= audioSlider.x - 6 && x <= audioSlider.x + audioSlider.w + 6 &&
+        y >= audioSlider.y && y <= audioSlider.y + audioSlider.h) {
+      setMusicVolume((x - audioSlider.x) / audioSlider.w, true);
+      audioDragging = true;
+      return;
+    }
     // 按钮优先：菜单、商店、暂停、HUD 都靠 G.uiButtons 命中
     for (const b of G.uiButtons) {
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
@@ -1548,6 +1664,7 @@
     ctx.setTransform(s, 0, 0, s, offX * dpr, offY * dpr);
     ctx.fillStyle = '#05060c';
     ctx.fillRect(0, 0, W, H);
+    audioSlider.w = 0; // 只有画了音乐控件的界面才可拖音量
 
     // 相机震动
     let sx = 0, sy = 0;
@@ -2509,12 +2626,15 @@
     ctx.fillStyle = '#ffffff';
     ctx.beginPath(); ctx.arc(sx + (on ? sw - sh / 2 : sh / 2), sy + sh / 2, sh / 2 - 3, 0, TAU); ctx.fill();
 
+    G.uiButtons.push({ x: tx, y: ty, w: tw, h: th, action: toggleHitbox });
+
+    // 背景音乐
+    drawAudioControls(W / 2 - 134, ty + th + 30);
+
     ctx.textAlign = 'center';
     ctx.font = 'bold 12px ' + FONT;
     ctx.fillStyle = 'rgba(150,175,210,0.7)';
-    ctx.fillText('每波开始自动存档 · 设置会记住', W / 2, ty + th + 22);
-
-    G.uiButtons.push({ x: tx, y: ty, w: tw, h: th, action: toggleHitbox });
+    ctx.fillText('每波开始自动存档 · 设置会记住', W / 2, ty + th + 66);
     ctx.restore();
   }
 
@@ -2582,6 +2702,10 @@
     drawSmallButton('统计数据', sx0, sy, sw, sh, showStats);
     drawSmallButton('导出存档', sx0 + sw + sgap, sy, sw, sh, exportSave);
     drawSmallButton('导入存档', sx0 + (sw + sgap) * 2, sy, sw, sh, importSaveFile);
+
+    // 背景音乐（设置单独存，不跟游戏存档走）
+    drawAudioControls(34, H - 56);
+    ctx.textAlign = 'center';
 
     if (menuNotice && performance.now() < menuNoticeUntil) {
       ctx.font = 'bold 13px ' + FONT;
@@ -3158,6 +3282,7 @@
   };
 
   loadSave();
+  loadAudioSettings();
   AC.muted = SaveData.muted;
   resetGame();
   G.state = 'menu';
