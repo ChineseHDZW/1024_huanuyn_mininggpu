@@ -182,6 +182,7 @@
 
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
+    initAudio(); // 键盘也算一次交互，顺便放背景音乐
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (G.state === 'stats') {
       if (e.code === 'Escape' || e.code === 'KeyP') backToMenu();
