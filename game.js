@@ -91,7 +91,7 @@
     keys[e.code] = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR') game.restart();
-    if (e.code === 'KeyM') { AC.muted = !AC.muted; }
+    if (e.code === 'KeyM') { AC.muted = !AC.muted; SaveData.muted = AC.muted; persistSave(); }
     if (e.code === 'KeyP' || e.code === 'Escape') { togglePause(); }
     // 只有战斗中才响应软件快捷键，避免在商店/结算/暂停界面白烧冷却
     if (G.state === 'playing' && !G.paused) {
@@ -220,16 +220,16 @@
     { name: 'DDR5 256G ECC',  maxMana: 430, regen: 30, cost: 950 },
   ];
 
-  // 软件：主动技能，占 SSD 槽位
+  // 软件：主动技能，占 SSD 槽位；desc 是商店里给人看的实际效果
   const SOFTWARES = [
-    { id: 'antivirus',  name: '杀毒软件',   tag: '全盘扫描，格杀勿论',   cd: 11, cost: 260, color: '#7dffd4', effect: 'aoe' },
-    { id: 'taskmgr',    name: '任务管理器', tag: '结束掉这些进程',       cd: 14, cost: 240, color: '#8ef2ff', effect: 'slow' },
-    { id: 'afterburner', name: '超频工具',  tag: '功耗墙？不存在的',     cd: 16, cost: 300, color: '#ff8a3d', effect: 'overclock' },
-    { id: 'driver',     name: '驱动更新',   tag: '重启解决 99% 的问题',  cd: 18, cost: 220, color: '#9b8cff', effect: 'reset' },
-    { id: 'restore',    name: '系统还原',   tag: '回到昨天',             cd: 22, cost: 280, color: '#7dff9b', effect: 'heal' },
-    { id: 'donut',      name: '甜甜圈烤机', tag: '先烤自己，再烤别人',   cd: 20, cost: 340, color: '#ffd166', effect: 'burn' },
-    { id: 'miner',      name: '挖矿脚本',   tag: '算力就是钱',           cd: 15, cost: 260, color: '#ffe066', effect: 'gold' },
-    { id: 'firewall',   name: '防火墙',     tag: '已拦截全部伤害',       cd: 19, cost: 320, color: '#5ad1ff', effect: 'shield' },
+    { id: 'antivirus',  name: '杀毒软件',   tag: '全盘扫描，格杀勿论',   desc: '半径 470 内清场，伤害 240+34×波次', cd: 11, cost: 260, color: '#7dffd4', effect: 'aoe' },
+    { id: 'taskmgr',    name: '任务管理器', tag: '结束掉这些进程',       desc: '全场敌人减速到 45%，持续 4 秒', cd: 14, cost: 240, color: '#8ef2ff', effect: 'slow' },
+    { id: 'afterburner', name: '超频工具',  tag: '功耗墙？不存在的',     desc: '攻击间隔缩短到 55%，持续 5 秒', cd: 16, cost: 300, color: '#ff8a3d', effect: 'overclock' },
+    { id: 'driver',     name: '驱动更新',   tag: '重启解决 99% 的问题',  desc: '重置显卡冷却，回复 45 蓝', cd: 18, cost: 220, color: '#9b8cff', effect: 'reset' },
+    { id: 'restore',    name: '系统还原',   tag: '回到昨天',             desc: '回复 35% 最大生命（42 点）', cd: 22, cost: 280, color: '#7dff9b', effect: 'heal' },
+    { id: 'donut',      name: '甜甜圈烤机', tag: '先烤自己，再烤别人',   desc: '全屏伤害 320+42×波次，自损 12%', cd: 20, cost: 340, color: '#ffd166', effect: 'burn' },
+    { id: 'miner',      name: '挖矿脚本',   tag: '算力就是钱',           desc: '立刻 +80 矿币，6 秒拾取翻倍', cd: 15, cost: 260, color: '#ffe066', effect: 'gold' },
+    { id: 'firewall',   name: '防火墙',     tag: '已拦截全部伤害',       desc: '3.2 秒内完全免疫伤害', cd: 19, cost: 320, color: '#5ad1ff', effect: 'shield' },
   ];
 
   // SSD：软件槽位上限
@@ -251,6 +251,183 @@
     leak:   { hp: 40, speed: 68,  dmg: 18, r: 24, color: '#a98cff', gold: 5, score: 2 },
     boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
+
+  // ---------------- 本地存档（localStorage + 哈希校验） ----------------
+  // 设置 + 统计 + 每波开始时的进度存档；导出/导入带 FNV-1a 校验
+  const SAVE_KEY = 'kuangku.save.v1';
+  const SAVE_VERSION = 1;
+  const SaveData = {
+    showHitbox: true,
+    muted: false,
+    bestWave: 0,
+    bestKills: 0,
+    bestTime: 0,
+    runs: 0,
+    totalKills: 0,
+    totalTime: 0,
+    run: null,
+  };
+
+  let menuNotice = '';
+  let menuNoticeUntil = 0;
+  function notifyMenu(msg, ms) {
+    menuNotice = msg;
+    menuNoticeUntil = performance.now() + (ms || 4000);
+  }
+
+  // FNV-1a 32 位：做完整性校验，防止手改/传坏文件（不是加密）
+  function hashStr(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function resetSaveData() {
+    SaveData.showHitbox = true;
+    SaveData.muted = false;
+    SaveData.bestWave = 0;
+    SaveData.bestKills = 0;
+    SaveData.bestTime = 0;
+    SaveData.runs = 0;
+    SaveData.totalKills = 0;
+    SaveData.totalTime = 0;
+    SaveData.run = null;
+  }
+
+  function adoptSaveData(data, replace) {
+    if (!data || typeof data !== 'object') return;
+    if (replace) resetSaveData();
+    if (typeof data.showHitbox === 'boolean') SaveData.showHitbox = data.showHitbox;
+    if (typeof data.muted === 'boolean') SaveData.muted = data.muted;
+    if (typeof data.bestWave === 'number') SaveData.bestWave = clamp(Math.round(data.bestWave), 0, G.TOTAL_WAVES);
+    if (typeof data.bestKills === 'number') SaveData.bestKills = Math.max(0, Math.round(data.bestKills));
+    if (typeof data.bestTime === 'number') SaveData.bestTime = Math.max(0, data.bestTime);
+    if (typeof data.runs === 'number') SaveData.runs = Math.max(0, Math.round(data.runs));
+    if (typeof data.totalKills === 'number') SaveData.totalKills = Math.max(0, Math.round(data.totalKills));
+    if (typeof data.totalTime === 'number') SaveData.totalTime = Math.max(0, data.totalTime);
+    if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
+  }
+
+  function loadSave() {
+    try {
+      const raw = window.localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const outer = JSON.parse(raw);
+      if (!outer || typeof outer !== 'object') return;
+      if (outer.v === SAVE_VERSION && outer.data) {
+        if (outer.hash !== hashStr(JSON.stringify(outer.data))) {
+          notifyMenu('本地存档校验失败，已忽略', 6000);
+          return;
+        }
+        adoptSaveData(outer.data, true);
+      } else if (outer.run || typeof outer.bestWave === 'number') {
+        // 兼容 v0.9 没有哈希的旧存档，读一次后改写成新格式
+        adoptSaveData(outer, true);
+        persistSave();
+      }
+    } catch (e) { /* 隐私模式或存储被禁用时静默跳过 */ }
+  }
+
+  function persistSave() {
+    try {
+      const data = JSON.stringify(SaveData);
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, data: SaveData, hash: hashStr(data) }));
+    } catch (e) { /* 同上 */ }
+  }
+
+  // 每波开始（以及商店买完继续）时写一次进度存档
+  function saveCheckpoint() {
+    if (G.state !== 'playing' || !G.player) return;
+    SaveData.run = {
+      wave: G.wave,
+      gold: G.gold,
+      hp: Math.max(1, Math.round(G.player.hp)),
+      mana: Math.round(G.player.mana),
+      cpuIdx: G.cpuIdx,
+      gpuIdx: G.gpuIdx,
+      ramIdx: G.ramIdx,
+      ssdIdx: G.ssdIdx,
+      softwares: G.softwares.map((s) => s.id),
+      kills: G.kills,
+      playTime: Math.round(G.playTime),
+    };
+    persistSave();
+  }
+
+  // 一局结束：刷新最高纪录/累计统计，并清掉进度存档
+  function recordRun() {
+    SaveData.runs++;
+    SaveData.totalKills += G.kills;
+    SaveData.totalTime += G.playTime;
+    if (G.wave > SaveData.bestWave) SaveData.bestWave = G.wave;
+    if (G.kills > SaveData.bestKills) SaveData.bestKills = G.kills;
+    if (G.playTime > SaveData.bestTime) SaveData.bestTime = G.playTime;
+    SaveData.run = null;
+    persistSave();
+  }
+
+  // ---------------- 存档导出 / 导入 ----------------
+  function exportSaveText() {
+    const data = JSON.stringify(SaveData);
+    return JSON.stringify({ v: SAVE_VERSION, data: SaveData, hash: hashStr(data) }, null, 2);
+  }
+
+  function exportSave() {
+    try {
+      const blob = new Blob([exportSaveText()], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'kuangku-save-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      notifyMenu('存档已导出', 3500);
+    } catch (e) {
+      notifyMenu('导出失败：' + e.message, 6000);
+    }
+  }
+
+  function importSaveText(text) {
+    try {
+      const outer = JSON.parse(text);
+      if (!outer || outer.v !== SAVE_VERSION || !outer.data || typeof outer.hash !== 'string') {
+        throw new Error('不是本游戏的存档文件');
+      }
+      if (outer.hash !== hashStr(JSON.stringify(outer.data))) {
+        throw new Error('哈希校验失败，文件可能被改动');
+      }
+      adoptSaveData(outer.data, true);
+      persistSave();
+      AC.muted = SaveData.muted;
+      notifyMenu('存档导入成功', 5000);
+      return true;
+    } catch (e) {
+      notifyMenu('导入失败：' + e.message, 6000);
+      return false;
+    }
+  }
+
+  function importSaveFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (!file) { input.remove(); return; }
+      const reader = new FileReader();
+      reader.onload = () => { importSaveText(String(reader.result)); input.remove(); };
+      reader.onerror = () => { notifyMenu('读取文件失败', 5000); input.remove(); };
+      reader.readAsText(file);
+    });
+    input.click();
+  }
 
   // ---------------- 贴图资源 ----------------
   const ASSETS = {};
@@ -647,7 +824,7 @@
       for (let i = 0; i < 12; i++) {
         G.pickups.push({ x: e.x + rnd(90, -90), y: e.y + rnd(90, -90), vx: 0, vy: 0, v: rnd(12, 6), r: 6, life: 12 });
       }
-      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; } }, 900);
+      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; recordRun(); } }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
       if (Math.random() < 0.045) {
@@ -736,7 +913,7 @@
 
     // ----- 波次 -----
     G.waveTime += dt;
-    if (G.wave === 0) nextWave();
+    if (G.wave === 0) { nextWave(); saveCheckpoint(); }
     if (G.waveTime >= G.WAVE_LEN) {
       G.waveTime = 0;
       if (G.wave < G.TOTAL_WAVES) {
@@ -808,7 +985,7 @@
     // ----- 死亡 -----
     if (p.hp <= 0) {
       G.state = 'dead';
-      G.bestWave = Math.max(G.bestWave, G.wave);
+      recordRun();
       addParticles(p.x, p.y, '#8ef2ff', 40, 380, 1.0);
       addShake(20);
     }
@@ -1120,6 +1297,7 @@
     G.state = 'playing';
     G.waveTime = 0;
     G.uiButtons.length = 0; // 清掉商店留下的按钮，避免恢复战斗后误触购买
+    saveCheckpoint();       // 买完的配置才是这一波的真实起点
   }
 
   function togglePause() {
@@ -1130,17 +1308,67 @@
     else blip(760, 0.09, 'sine', 0.09, 1100);
   }
 
+  function toggleHitbox() {
+    SaveData.showHitbox = !SaveData.showHitbox;
+    persistSave();
+    blip(SaveData.showHitbox ? 980 : 620, 0.06, 'sine', 0.07, SaveData.showHitbox ? 1300 : 420);
+  }
+
+  function startNewGame() {
+    SaveData.run = null;
+    persistSave();
+    resetGame();
+  }
+
+  // 暂停里返回主界面：保留「每波开始」的进度存档，不额外覆盖
+  function backToMenu() {
+    if (G.state !== 'playing') return;
+    G.paused = false;
+    G.state = 'menu';
+    G.uiButtons.length = 0;
+  }
+
+  // 从「每波开始」的存档继续
+  function resumeSavedRun() {
+    const r = SaveData.run;
+    if (!r) { startNewGame(); return; }
+    resetGame();
+    G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
+    G.waveTime = 0;
+    G.gold = Math.max(0, Math.round(r.gold) || 0);
+    G.cpuIdx = clamp(Math.round(r.cpuIdx) || 0, 0, CPUS.length - 1);
+    G.gpuIdx = clamp(Math.round(r.gpuIdx) || 0, 0, GPUS.length - 1);
+    G.ramIdx = clamp(Math.round(r.ramIdx) || 0, 0, RAMS.length - 1);
+    G.ssdIdx = clamp(Math.round(r.ssdIdx) || 0, 0, SSDS.length - 1);
+    G.player.maxMana = ram().maxMana;
+    G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
+    G.player.mana = clamp(r.mana === undefined ? G.player.maxMana : Math.round(r.mana), 0, G.player.maxMana);
+    G.softwares = (r.softwares || [])
+      .map((id) => SOFTWARES.find((s) => s.id === id))
+      .filter(Boolean)
+      .slice(0, SSDS[G.ssdIdx].slots);
+    G.softCds = G.softwares.map(() => 0);
+    G.softFlash = G.softwares.map(() => 0);
+    G.kills = Math.max(0, Math.round(r.kills) || 0);
+    G.playTime = Math.max(0, Math.round(r.playTime) || 0);
+    G.state = 'playing';
+    G.paused = false;
+    addText(G.cam.x, G.cam.y - 250, '第 ' + G.wave + ' 波', '#8ef2ff', 34);
+    saveCheckpoint();
+  }
+
   // ---------------- 点击 ----------------
   function click(x, y) {
     initAudio();
-    if (G.state === 'menu') { resetGame(); return; }
-    if (G.state === 'dead' || G.state === 'win') { resetGame(); return; }
+    // 按钮优先：菜单、商店、暂停、HUD 都靠 G.uiButtons 命中
     for (const b of G.uiButtons) {
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        G.uiButtons.length = 0; // 防止同一帧里二次命中/误触
         if (b.action) b.action();
         return;
       }
     }
+    if (G.state === 'dead' || G.state === 'win') { startNewGame(); return; }
   }
 
   // ---------------- 绘制 ----------------
@@ -1164,7 +1392,10 @@
 
     drawPickups();
     drawEnemies();
-    if (G.state !== 'dead') drawPlayer();
+    if (G.state !== 'dead') {
+      drawPlayer();
+      if (SaveData.showHitbox) drawHitbox();
+    }
     drawBullets();
     drawEBullets();
     drawFx(dt);
@@ -1373,6 +1604,35 @@
       ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.arc(0, -22, 44 + Math.sin(G.t * 6) * 2, 0, TAU); ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  // ----- 判定点：角色实际吃伤害的圆（半径 36，与 update 里的碰撞一致） -----
+  function drawHitbox() {
+    const p = G.player;
+    if (!p) return;
+    const R = 36;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    ctx.globalAlpha = 0.09;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+
+    ctx.globalAlpha = 0.62;
+    ctx.strokeStyle = '#8ef2ff';
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([7, 7]);
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 正中心的判定点
+    ctx.globalAlpha = 0.9;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#8ef2ff';
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(0, 0, 2.4, 0, TAU); ctx.fill();
+
     ctx.restore();
   }
 
@@ -1981,7 +2241,7 @@
     ctx.fillStyle = 'rgba(190,215,255,0.82)';
     ctx.fillText('第 ' + G.wave + ' 波 · 击杀 ' + G.kills + ' · ◈ ' + G.gold + ' · 用时 ' + Math.floor(G.playTime) + ' 秒', W / 2, H / 2 - 22);
 
-    const bw = 220, bh = 56, bx = W / 2 - bw / 2, by = H / 2 + 24;
+    const bw = 220, bh = 52, bx = W / 2 - bw / 2, by = H / 2 + 24;
     const hov = mouse.x > bx && mouse.x < bx + bw && mouse.y > by && mouse.y < by + bh;
     ctx.fillStyle = hov ? 'rgba(50,92,130,0.95)' : 'rgba(26,44,68,0.95)';
     ctx.strokeStyle = 'rgba(142,242,255,0.85)';
@@ -1992,14 +2252,54 @@
     ctx.fillText('继续游戏', W / 2, by + bh / 2 + 1);
     G.uiButtons.push({ x: bx, y: by, w: bw, h: bh, action: togglePause });
 
-    ctx.font = 'bold 13px ' + FONT;
+    ctx.font = 'bold 12px ' + FONT;
     ctx.fillStyle = 'rgba(150,175,210,0.75)';
-    ctx.fillText('P / Esc 也可以继续', W / 2, by + bh + 30);
+    ctx.fillText('P / Esc 也可以继续', W / 2, by + bh + 18);
+
+    // 返回主界面（不覆盖存档，主菜单还能继续这一波）
+    const mbw = 200, mbh = 42, mbx = W / 2 - mbw / 2, mby = by + bh + 34;
+    const mhov = mouse.x > mbx && mouse.x < mbx + mbw && mouse.y > mby && mouse.y < mby + mbh;
+    ctx.fillStyle = mhov ? 'rgba(58,34,42,0.95)' : 'rgba(30,22,30,0.9)';
+    ctx.strokeStyle = 'rgba(255,150,150,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(mbx, mby, mbw, mbh, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffdede';
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillText('返回主界面', W / 2, mby + mbh / 2 + 1);
+    G.uiButtons.push({ x: mbx, y: mby, w: mbw, h: mbh, action: backToMenu });
+
+    // 判定点开关
+    const tw = 260, th = 44, tx = W / 2 - tw / 2, ty = mby + mbh + 18;
+    const thov = mouse.x > tx && mouse.x < tx + tw && mouse.y > ty && mouse.y < ty + th;
+    ctx.fillStyle = thov ? 'rgba(24,42,66,0.95)' : 'rgba(16,28,48,0.92)';
+    ctx.strokeStyle = 'rgba(120,150,190,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, 10); ctx.fill(); ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = '#cfe3ff';
+    ctx.fillText('角色判定点', tx + 18, ty + th / 2);
+
+    const sw = 52, sh = 22, sx = tx + tw - sw - 18, sy = ty + (th - sh) / 2;
+    const on = SaveData.showHitbox;
+    ctx.fillStyle = on ? 'rgba(80,220,255,0.9)' : 'rgba(70,90,120,0.75)';
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, sh / 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(sx + (on ? sw - sh / 2 : sh / 2), sy + sh / 2, sh / 2 - 3, 0, TAU); ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.7)';
+    ctx.fillText('每波开始自动存档 · 设置会记住', W / 2, ty + th + 22);
+
+    G.uiButtons.push({ x: tx, y: ty, w: tw, h: th, action: toggleHitbox });
     ctx.restore();
   }
 
   // ----- 菜单 -----
   function drawMenu() {
+    G.uiButtons.length = 0;
     const bg = ASSETS.bgMenu;
     if (bg && bg.complete && bg.naturalWidth) {
       const sc = Math.max(W / bg.width, H / bg.height);
@@ -2031,17 +2331,83 @@
 
     ctx.font = 'bold 16px ' + FONT;
     ctx.fillStyle = 'rgba(185,205,235,0.9)';
-    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 + 20);
+    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 + 8);
     ctx.fillStyle = 'rgba(165,190,225,0.85)';
-    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 48);
+    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 34);
 
-    const blink = 0.78 + Math.sin(performance.now() / 420) * 0.22;
-    ctx.fillStyle = 'rgba(142,242,255,' + blink + ')';
-    ctx.font = 'bold 26px ' + FONT;
-    ctx.fillText('点击任意处 / 按 R 开始', W / 2, H / 2 + 130);
+    // 统计：最高纪录 + 累计
+    ctx.font = 'bold 14px ' + FONT;
+    if (SaveData.bestWave > 0) {
+      ctx.fillStyle = 'rgba(255,209,102,0.92)';
+      ctx.fillText('纪录 第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills + ' · 存活 ' + fmtClock(SaveData.bestTime), W / 2, H / 2 + 64);
+      ctx.fillStyle = 'rgba(170,195,230,0.8)';
+      ctx.fillText('累计 ' + SaveData.runs + ' 局 · 击杀 ' + SaveData.totalKills + ' · 时长 ' + fmtClock(SaveData.totalTime), W / 2, H / 2 + 86);
+    } else {
+      ctx.fillStyle = 'rgba(170,195,230,0.8)';
+      ctx.fillText('还没有纪录，先打一局吧', W / 2, H / 2 + 64);
+    }
+
+    const hasRun = !!(SaveData.run && SaveData.run.wave);
+    const btnY = H / 2 + 108;
+    if (hasRun) {
+      drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 150, btnY, 300, 52, '#8ef2ff', resumeSavedRun);
+      drawMenuButton('新开一局', W / 2 - 150, btnY + 62, 300, 52, 'rgba(190,215,255,0.75)', startNewGame);
+    } else {
+      drawMenuButton('开始游戏', W / 2 - 150, btnY, 300, 52, '#8ef2ff', startNewGame);
+    }
+
+    // 存档导出 / 导入
+    const sw = 150, sh = 34, sy = H - 92;
+    drawSmallButton('导出存档', W / 2 - sw - 8, sy, sw, sh, exportSave);
+    drawSmallButton('导入存档', W / 2 + 8, sy, sw, sh, importSaveFile);
+
+    if (menuNotice && performance.now() < menuNoticeUntil) {
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = menuNotice.indexOf('失败') >= 0 ? 'rgba(255,120,120,0.95)' : 'rgba(125,255,212,0.95)';
+      ctx.fillText(menuNotice, W / 2, H - 116);
+    }
+
     ctx.font = '14px ' + FONT;
     ctx.fillStyle = 'rgba(120,140,170,0.7)';
-    ctx.fillText('v0.9 · 1024 程序员节', W / 2, H - 34);
+    ctx.fillText('v0.9.1 · 1024 程序员节', W / 2, H - 36);
+  }
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h > 0 ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function drawSmallButton(label, x, y, w, h, action) {
+    const hov = mouse.x > x && mouse.x < x + w && mouse.y > y && mouse.y < y + h;
+    ctx.save();
+    ctx.fillStyle = hov ? 'rgba(30,52,80,0.95)' : 'rgba(14,26,44,0.85)';
+    ctx.strokeStyle = hov ? 'rgba(142,242,255,0.7)' : 'rgba(130,160,200,0.45)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 9); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(205,225,248,0.9)';
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    G.uiButtons.push({ x, y, w, h, action });
+  }
+
+  function drawMenuButton(label, x, y, w, h, accent, action) {
+    const hov = mouse.x > x && mouse.x < x + w && mouse.y > y && mouse.y < y + h;
+    ctx.save();
+    ctx.shadowBlur = hov ? 22 : 10;
+    ctx.shadowColor = accent;
+    ctx.fillStyle = hov ? 'rgba(24,48,74,0.96)' : 'rgba(12,24,42,0.9)';
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = hov ? 2.4 : 1.8;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 14); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 20px ' + FONT;
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    G.uiButtons.push({ x, y, w, h, action });
   }
 
   // ----- 商店 -----
@@ -2060,7 +2426,7 @@
     const cards = G.shopCards;
     const gap = 24;
     const cw = Math.min(300, (W - 120 - gap * Math.max(0, cards.length - 1)) / Math.max(1, cards.length));
-    const chh = 372;
+    const chh = 392;
     const sc = cw / 300;
     const totalW = cards.length * cw + Math.max(0, cards.length - 1) * gap;
     let x0 = W / 2 - totalW / 2;
@@ -2090,28 +2456,55 @@
 
       ctx.font = 'bold ' + Math.round(21 * Math.max(0.72, sc)) + 'px ' + FONT;
       ctx.fillStyle = '#eaf3ff';
-      wrapText(c.name, x0 + cw / 2, y0 + 204, cw - 26, 24);
+      wrapText(c.name, x0 + cw / 2, y0 + 202, cw - 26, 24);
 
       ctx.font = 'bold 14px ' + FONT;
       ctx.fillStyle = 'rgba(180,205,235,0.85)';
-      wrapText(c.tag, x0 + cw / 2, y0 + 232, cw - 44, 21);
+      wrapText(c.tag, x0 + cw / 2, y0 + 230, cw - 44, 20);
+
+      // 这件配件到底改了什么属性
+      const info = [];
+      if (c.kind === 'cpu') {
+        const cur = CPUS[G.cpuIdx], nxt = CPUS[c.idx];
+        info.push('射速 ' + (1 / cur.interval).toFixed(1) + ' → ' + (1 / nxt.interval).toFixed(1) + ' 发/秒');
+        info.push('伤害 ' + cur.dmg + ' → ' + nxt.dmg + ' · 弹道 ' + cur.count + ' → ' + nxt.count);
+        if (nxt.pierce !== cur.pierce) info.push('穿透 ' + cur.pierce + ' → ' + nxt.pierce);
+      } else if (c.kind === 'gpu') {
+        info.push('技能：' + (SKILL_NAMES[GPUS[c.idx].skill] || '无'));
+        info.push('蓝耗 ' + GPUS[c.idx].mana + ' · 冷却 ' + GPUS[c.idx].cd.toFixed(1) + ' 秒');
+        info.push('技能伤害看 CPU');
+      } else if (c.kind === 'ram') {
+        info.push('蓝上限 ' + ram().maxMana + ' → ' + RAMS[c.idx].maxMana);
+        info.push('回蓝 ' + ram().regen + ' → ' + RAMS[c.idx].regen + ' /秒');
+        info.push('冷却缩短 ' + (G.ramIdx * 5.5).toFixed(1) + '% → ' + (c.idx * 5.5).toFixed(1) + '%');
+      } else if (c.kind === 'ssd') {
+        info.push('能同时携带 ' + SSDS[c.idx].slots + ' 个主动技能');
+        info.push('装满后新软件顶掉最旧的');
+      } else if (c.kind === 'software') {
+        info.push('冷却 ' + c.sw.cd + ' 秒 · 占 1 槽');
+      }
 
       ctx.font = '13px ' + FONT;
-      ctx.fillStyle = 'rgba(150,175,210,0.8)';
-      let line = '';
-      if (c.kind === 'cpu') line = '射速 ' + (1 / CPUS[c.idx].interval).toFixed(1) + '/s · 伤害 ' + CPUS[c.idx].dmg + ' · 弹道 ' + CPUS[c.idx].count;
-      if (c.kind === 'gpu') line = '技能：' + (SKILL_NAMES[GPUS[c.idx].skill] || '无') + ' · 蓝耗 ' + GPUS[c.idx].mana;
-      if (c.kind === 'ram') line = '蓝上限 ' + RAMS[c.idx].maxMana + ' · 回蓝 ' + RAMS[c.idx].regen + '/s';
-      ctx.fillText(line, x0 + cw / 2, y0 + 276);
+      ctx.fillStyle = 'rgba(150,175,210,0.85)';
+      if (c.kind === 'software') {
+        ctx.fillText(info[0], x0 + cw / 2, y0 + 272);
+        ctx.font = '12px ' + FONT;
+        ctx.fillStyle = c.sw.color;
+        wrapText(c.sw.desc, x0 + cw / 2, y0 + 292, cw - 26, 15);
+      } else {
+        for (let i = 0; i < info.length && i < 3; i++) {
+          ctx.fillText(info[i], x0 + cw / 2, y0 + 272 + i * 17);
+        }
+      }
 
       ctx.font = 'bold 24px ' + FONT;
       ctx.fillStyle = afford ? '#ffd166' : '#5a6478';
-      ctx.fillText('◈ ' + c.cost, x0 + cw / 2, y0 + 326);
+      ctx.fillText('◈ ' + c.cost, x0 + cw / 2, y0 + 348);
 
       if (!afford) {
         ctx.font = 'bold 13px ' + FONT;
         ctx.fillStyle = 'rgba(255,90,90,0.85)';
-        ctx.fillText('金币不够', x0 + cw / 2, y0 + 350);
+        ctx.fillText('金币不够', x0 + cw / 2, y0 + 372);
       }
 
       G.uiButtons.push({ x: x0, y: y0, w: cw, h: chh, action: () => buyCard(c) });
@@ -2263,6 +2656,7 @@
 
   // ----- 结算 -----
   function drawGameOver() {
+    G.uiButtons.length = 0;
     ctx.fillStyle = 'rgba(10,4,10,0.86)';
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
@@ -2279,12 +2673,17 @@
     ctx.fillText('坚持 ' + Math.floor(sec / 60) + ' 分 ' + (sec % 60) + ' 秒   ·   第 ' + G.wave + ' 波', W / 2, H / 2 + 10);
     ctx.fillText('击杀 ' + G.kills + '   ·   总伤害 ' + Math.floor(G.damageDealt), W / 2, H / 2 + 48);
 
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = 'rgba(255,209,102,0.9)';
+    ctx.fillText('最高纪录：第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills, W / 2, H / 2 + 86);
+
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('点击或按 R 再来一局', W / 2, H / 2 + 130);
+    ctx.fillText('点击或按 R 再来一局', W / 2, H / 2 + 150);
   }
 
   function drawWin() {
+    G.uiButtons.length = 0;
     ctx.fillStyle = 'rgba(4,12,16,0.86)';
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
@@ -2299,9 +2698,12 @@
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
     ctx.fillText('用时 ' + Math.floor(G.playTime / 60) + ' 分 ' + Math.floor(G.playTime % 60) + ' 秒   ·   击杀 ' + G.kills, W / 2, H / 2 + 20);
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = 'rgba(255,209,102,0.9)';
+    ctx.fillText('最高纪录：第 ' + SaveData.bestWave + ' 波 · 击杀 ' + SaveData.bestKills, W / 2, H / 2 + 58);
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 110);
+    ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 120);
   }
 
   // ---------------- 主循环 ----------------
@@ -2320,15 +2722,19 @@
 
   const game = {
     restart() {
-      if (G.state === 'menu') resetGame();
-      else resetGame();
+      startNewGame();
     },
     click,
   };
 
+  loadSave();
+  AC.muted = SaveData.muted;
   resetGame();
   G.state = 'menu';
   window.__GAME = G;   // 调试用，正式版无副作用
+  window.__SAVE = SaveData;
+  window.__exportSaveText = exportSaveText;
+  window.__importSaveText = importSaveText;
 
   // 调试/演示入口：?auto=1 直接开局，?wave=N 跳到第 N 波
   const qs = new URLSearchParams(location.search);
