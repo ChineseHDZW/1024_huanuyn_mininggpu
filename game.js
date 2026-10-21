@@ -14,6 +14,7 @@
   const pick = (arr) => arr[(Math.random() * arr.length) | 0];
   const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
   const FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+  const FONT_MONO = 'Consolas,"Courier New",monospace';
 
   // ---------------- 场地 ----------------
   const ARENA = { w: 2300, h: 1500 };
@@ -42,6 +43,7 @@
   const AC = { ctx: null, master: null, muted: false, lastShot: 0 };
 
   function initAudio() {
+    applyBgm(); // 首次点击/触摸时开始播放背景音乐（绕过自动播放限制）
     if (AC.ctx) { if (AC.ctx.state === 'suspended') AC.ctx.resume(); return; }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
@@ -83,23 +85,128 @@
     src.start(t);
   }
 
+  // ---------------- 背景音乐（设置单独存，不放进游戏存档） ----------------
+  const AUDIO_KEY = 'kuangku.audio.v1';
+  const BGM = { el: null, enabled: true, volume: 0.5 };
+  const audioSlider = { x: 0, y: 0, w: 0, h: 0 };
+  let audioDragging = false;
+
+  function loadAudioSettings() {
+    try {
+      const raw = window.localStorage.getItem(AUDIO_KEY);
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return;
+      if (typeof o.enabled === 'boolean') BGM.enabled = o.enabled;
+      if (typeof o.volume === 'number') BGM.volume = clamp(o.volume, 0, 1);
+    } catch (e) { /* 隐私模式忽略 */ }
+  }
+
+  function saveAudioSettings() {
+    try {
+      window.localStorage.setItem(AUDIO_KEY, JSON.stringify({ enabled: BGM.enabled, volume: BGM.volume }));
+    } catch (e) { /* 同上 */ }
+  }
+
+  function initBgm() {
+    if (BGM.el) return BGM.el;
+    try {
+      const a = new Audio('assets/bgm.mp3');
+      a.loop = true;
+      a.preload = 'auto';
+      a.volume = BGM.volume;
+      BGM.el = a;
+    } catch (e) { BGM.el = null; }
+    return BGM.el;
+  }
+
+  function applyBgm() {
+    const a = initBgm();
+    if (!a) return;
+    a.volume = BGM.volume;
+    if (!BGM.enabled) { a.pause(); return; }
+    if (a.paused) {
+      const p = a.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  }
+
+  function toggleMusic() {
+    BGM.enabled = !BGM.enabled;
+    saveAudioSettings();
+    applyBgm();
+    blip(BGM.enabled ? 880 : 520, 0.06, 'sine', 0.07, BGM.enabled ? 1200 : 360);
+  }
+
+  function setMusicVolume(v, persist) {
+    BGM.volume = clamp(v, 0, 1);
+    if (BGM.el) BGM.el.volume = BGM.volume;
+    if (persist) saveAudioSettings();
+  }
+
+  // 主界面和暂停界面共用的音乐开关 + 音量条
+  function drawAudioControls(x, y) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(190,215,245,0.9)';
+    ctx.fillText('音乐', x, y);
+
+    const sw = 44, sh = 20, sx = x + 42, sy = y - sh / 2;
+    ctx.fillStyle = BGM.enabled ? 'rgba(80,220,255,0.9)' : 'rgba(70,90,120,0.75)';
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, sh / 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(sx + (BGM.enabled ? sw - sh / 2 : sh / 2), y, sh / 2 - 3, 0, TAU); ctx.fill();
+    G.uiButtons.push({ x: sx - 6, y: sy - 6, w: sw + 12, h: sh + 12, action: toggleMusic });
+
+    const tx = x + 104, tw = 132;
+    ctx.fillStyle = 'rgba(60,80,110,0.85)';
+    ctx.beginPath(); ctx.roundRect(tx, y - 3, tw, 6, 3); ctx.fill();
+    ctx.fillStyle = 'rgba(142,242,255,0.9)';
+    ctx.beginPath(); ctx.roundRect(tx, y - 3, tw * BGM.volume, 6, 3); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(tx + tw * BGM.volume, y, 6, 0, TAU); ctx.fill();
+    ctx.font = 'bold 11px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.75)';
+    ctx.fillText(Math.round(BGM.volume * 100) + '%', tx + tw + 8, y);
+
+    audioSlider.x = tx;
+    audioSlider.y = y - 10;
+    audioSlider.w = tw;
+    audioSlider.h = 20;
+  }
+
   // ---------------- 输入 ----------------
   const keys = Object.create(null);
   const mouse = { x: W / 2, y: H / 2, down: false };
 
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
+    initAudio(); // 键盘也算一次交互，顺便放背景音乐
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    if (G.state === 'stats') {
+      if (e.code === 'Escape' || e.code === 'KeyP') backToMenu();
+      return;
+    }
     if (e.code === 'KeyR') game.restart();
-    if (e.code === 'KeyM') { AC.muted = !AC.muted; }
-    if (e.code === 'Space') { useSoftware(0); }
-    if (e.code === 'Digit1') { useSoftware(0); }
-    if (e.code === 'Digit2') { useSoftware(1); }
-    if (e.code === 'Digit3') { useSoftware(2); }
-    if (e.code === 'Digit4') { useSoftware(3); }
+    if (e.code === 'KeyM') { AC.muted = !AC.muted; SaveData.muted = AC.muted; persistSave(); }
+    if (e.code === 'KeyP' || e.code === 'Escape') { togglePause(); }
+    if (e.code === 'KeyT') { cycleSpeed(); }
+    // 只有战斗中才响应软件快捷键，避免在商店/结算/暂停界面白烧冷却
+    if (G.state === 'playing' && !G.paused) {
+      if (e.code === 'Space') { useSoftware(0); }
+      if (e.code === 'Digit1') { useSoftware(0); }
+      if (e.code === 'Digit2') { useSoftware(1); }
+      if (e.code === 'Digit3') { useSoftware(2); }
+      if (e.code === 'Digit4') { useSoftware(3); }
+    }
   });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
   window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+  // 切到后台自动暂停，回来不至于已经被怪围死
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && G.state === 'playing' && !G.paused) togglePause();
+  });
 
   function toLogical(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
@@ -111,6 +218,7 @@
   canvas.addEventListener('mousemove', (e) => {
     const p = toLogical(e.clientX, e.clientY);
     mouse.x = p.x; mouse.y = p.y;
+    if (audioDragging && audioSlider.w > 0) setMusicVolume((p.x - audioSlider.x) / audioSlider.w, false);
   });
   canvas.addEventListener('mousedown', (e) => {
     mouse.down = true;
@@ -118,7 +226,10 @@
     mouse.x = p.x; mouse.y = p.y;
     game.click(p.x, p.y);
   });
-  window.addEventListener('mouseup', () => { mouse.down = false; });
+  window.addEventListener('mouseup', () => {
+    mouse.down = false;
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
+  });
 
   // ---------------- 触控（移动端） ----------------
   const touch = { active: false, id: null, ox: 0, oy: 0, x: 0, y: 0, dx: 0, dy: 0, mag: 0 };
@@ -128,6 +239,12 @@
     initAudio();
     const t = e.changedTouches[0];
     const p = toLogical(t.clientX, t.clientY);
+    if (audioSlider.w > 0 && p.x >= audioSlider.x - 6 && p.x <= audioSlider.x + audioSlider.w + 6 &&
+        p.y >= audioSlider.y && p.y <= audioSlider.y + audioSlider.h) {
+      setMusicVolume((p.x - audioSlider.x) / audioSlider.w, true);
+      audioDragging = true;
+      return;
+    }
     if (G.state !== 'playing') {
       game.click(p.x, p.y);
       return;
@@ -147,6 +264,11 @@
 
   canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
+    if (audioDragging && audioSlider.w > 0) {
+      const t0 = e.changedTouches[0];
+      if (t0) setMusicVolume((toLogical(t0.clientX, t0.clientY).x - audioSlider.x) / audioSlider.w, false);
+      return;
+    }
     for (const t of e.changedTouches) {
       if (t.identifier !== touch.id) continue;
       const p = toLogical(t.clientX, t.clientY);
@@ -165,6 +287,7 @@
 
   canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
     for (const t of e.changedTouches) {
       if (t.identifier === touch.id) {
         touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
@@ -172,6 +295,7 @@
     }
   }, { passive: false });
   canvas.addEventListener('touchcancel', () => {
+    if (audioDragging) { audioDragging = false; saveAudioSettings(); }
     touch.active = false; touch.dx = 0; touch.dy = 0; touch.mag = 0;
   }, { passive: false });
 
@@ -212,16 +336,16 @@
     { name: 'DDR5 256G ECC',  maxMana: 430, regen: 30, cost: 950 },
   ];
 
-  // 软件：主动技能，占 SSD 槽位
+  // 软件：主动技能，占 SSD 槽位；desc 是商店里给人看的实际效果
   const SOFTWARES = [
-    { id: 'antivirus',  name: '杀毒软件',   tag: '全盘扫描，格杀勿论',   cd: 11, cost: 260, color: '#7dffd4', effect: 'aoe' },
-    { id: 'taskmgr',    name: '任务管理器', tag: '结束掉这些进程',       cd: 14, cost: 240, color: '#8ef2ff', effect: 'slow' },
-    { id: 'afterburner', name: '超频工具',  tag: '功耗墙？不存在的',     cd: 16, cost: 300, color: '#ff8a3d', effect: 'overclock' },
-    { id: 'driver',     name: '驱动更新',   tag: '重启解决 99% 的问题',  cd: 18, cost: 220, color: '#9b8cff', effect: 'reset' },
-    { id: 'restore',    name: '系统还原',   tag: '回到昨天',             cd: 22, cost: 280, color: '#7dff9b', effect: 'heal' },
-    { id: 'donut',      name: '甜甜圈烤机', tag: '先烤自己，再烤别人',   cd: 20, cost: 340, color: '#ffd166', effect: 'burn' },
-    { id: 'miner',      name: '挖矿脚本',   tag: '算力就是钱',           cd: 15, cost: 260, color: '#ffe066', effect: 'gold' },
-    { id: 'firewall',   name: '防火墙',     tag: '已拦截全部伤害',       cd: 19, cost: 320, color: '#5ad1ff', effect: 'shield' },
+    { id: 'antivirus',  name: '杀毒软件',   tag: '全盘扫描，格杀勿论',   desc: '半径 470 内清场，伤害 240+34×波次', cd: 11, cost: 260, color: '#7dffd4', effect: 'aoe' },
+    { id: 'taskmgr',    name: '任务管理器', tag: '结束掉这些进程',       desc: '全场敌人减速到 45%，持续 4 秒', cd: 14, cost: 240, color: '#8ef2ff', effect: 'slow' },
+    { id: 'afterburner', name: '超频工具',  tag: '功耗墙？不存在的',     desc: '攻击间隔缩短到 55%，持续 5 秒', cd: 16, cost: 300, color: '#ff8a3d', effect: 'overclock' },
+    { id: 'driver',     name: '驱动更新',   tag: '重启解决 99% 的问题',  desc: '重置显卡冷却，回复 45 蓝', cd: 18, cost: 220, color: '#9b8cff', effect: 'reset' },
+    { id: 'restore',    name: '系统还原',   tag: '回到昨天',             desc: '回复 35% 最大生命（42 点）', cd: 22, cost: 280, color: '#7dff9b', effect: 'heal' },
+    { id: 'donut',      name: '甜甜圈烤机', tag: '先烤自己，再烤别人',   desc: '全屏伤害 320+42×波次，自损 12%', cd: 20, cost: 340, color: '#ffd166', effect: 'burn' },
+    { id: 'miner',      name: '挖矿脚本',   tag: '算力就是钱',           desc: '立刻 +80 矿币，6 秒拾取翻倍', cd: 15, cost: 260, color: '#ffe066', effect: 'gold' },
+    { id: 'firewall',   name: '防火墙',     tag: '已拦截全部伤害',       desc: '3.2 秒内完全免疫伤害', cd: 19, cost: 320, color: '#5ad1ff', effect: 'shield' },
   ];
 
   // SSD：软件槽位上限
@@ -243,6 +367,299 @@
     leak:   { hp: 40, speed: 68,  dmg: 18, r: 24, color: '#a98cff', gold: 5, score: 2 },
     boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
+
+  // ---------------- 难度 ----------------
+  // 只改怪物伤害；简单 = 原来的数值
+  const DIFFS = {
+    easy:   { name: '简单', dmg: 1.0, color: '#7dffd4' },
+    normal: { name: '普通', dmg: 1.5, color: '#8ef2ff' },
+    hard:   { name: '困难', dmg: 2.0, color: '#ff8ad8' },
+  };
+  const DIFF_KEYS = ['easy', 'normal', 'hard'];
+  function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
+  function diffDamageMul() { return diffOf(G.difficulty).dmg; }
+
+  // ---------------- 本地存档（localStorage + 哈希校验） ----------------
+  // 设置 + 分难度统计 + 每波开始时的进度存档；导出/导入带 FNV-1a 校验
+  const SAVE_KEY = 'kuangku.save.v1';
+  const SAVE_VERSION = 1;
+
+  function emptyStats() {
+    return { bestWave: 0, bestKills: 0, bestTime: 0, bestClear: 0, runs: 0, totalKills: 0, totalTime: 0 };
+  }
+
+  function emptyDetail() {
+    return {
+      wins: 0, deaths: 0,
+      kills: { worm: 0, trojan: 0, leak: 0, boss: 0 },
+      goldEarned: 0, goldSpent: 0,
+      damage: 0, skills: 0, softwareUses: 0,
+      buys: { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} },
+    };
+  }
+
+  const SaveData = {
+    showHitbox: true,
+    muted: false,
+    difficulty: 'easy',
+    bestWave: 0,
+    bestKills: 0,
+    bestTime: 0,
+    runs: 0,
+    totalKills: 0,
+    totalTime: 0,
+    stats: { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() },
+    detail: emptyDetail(),
+    run: null,
+  };
+
+  let menuNotice = '';
+  let menuNoticeUntil = 0;
+  function notifyMenu(msg, ms) {
+    menuNotice = msg;
+    menuNoticeUntil = performance.now() + (ms || 4000);
+  }
+
+  // FNV-1a 32 位：做完整性校验，防止手改/传坏文件（不是加密）
+  function hashStr(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function resetSaveData() {
+    SaveData.showHitbox = true;
+    SaveData.muted = false;
+    SaveData.difficulty = 'easy';
+    SaveData.bestWave = 0;
+    SaveData.bestKills = 0;
+    SaveData.bestTime = 0;
+    SaveData.runs = 0;
+    SaveData.totalKills = 0;
+    SaveData.totalTime = 0;
+    SaveData.stats = { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() };
+    SaveData.detail = emptyDetail();
+    SaveData.run = null;
+  }
+
+  function adoptDetail(src) {
+    if (!src || typeof src !== 'object') return;
+    const d = SaveData.detail;
+    const num = (v) => (typeof v === 'number' && isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+    d.wins += num(src.wins);
+    d.deaths += num(src.deaths);
+    if (src.kills && typeof src.kills === 'object') {
+      for (const k of ['worm', 'trojan', 'leak', 'boss']) d.kills[k] += num(src.kills[k]);
+    }
+    d.goldEarned += num(src.goldEarned);
+    d.goldSpent += num(src.goldSpent);
+    d.damage += num(src.damage);
+    d.skills += num(src.skills);
+    d.softwareUses += num(src.softwareUses);
+    if (src.buys && typeof src.buys === 'object') {
+      for (const kind of Object.keys(d.buys)) {
+        const b = src.buys[kind];
+        if (!b || typeof b !== 'object') continue;
+        for (const key of Object.keys(b)) {
+          const n = num(b[key]);
+          if (n) d.buys[kind][key] = (d.buys[kind][key] || 0) + n;
+        }
+      }
+    }
+  }
+
+  function adoptStats(dst, src) {
+    if (!src || typeof src !== 'object') return;
+    if (typeof src.bestWave === 'number') dst.bestWave = clamp(Math.round(src.bestWave), 0, G.TOTAL_WAVES);
+    if (typeof src.bestKills === 'number') dst.bestKills = Math.max(0, Math.round(src.bestKills));
+    if (typeof src.bestTime === 'number') dst.bestTime = Math.max(0, src.bestTime);
+    if (typeof src.bestClear === 'number') dst.bestClear = Math.max(0, src.bestClear);
+    if (typeof src.runs === 'number') dst.runs = Math.max(0, Math.round(src.runs));
+    if (typeof src.totalKills === 'number') dst.totalKills = Math.max(0, Math.round(src.totalKills));
+    if (typeof src.totalTime === 'number') dst.totalTime = Math.max(0, src.totalTime);
+  }
+
+  function adoptSaveData(data, replace) {
+    if (!data || typeof data !== 'object') return;
+    if (replace) resetSaveData();
+    if (typeof data.showHitbox === 'boolean') SaveData.showHitbox = data.showHitbox;
+    if (typeof data.muted === 'boolean') SaveData.muted = data.muted;
+    if (typeof data.bestWave === 'number') SaveData.bestWave = clamp(Math.round(data.bestWave), 0, G.TOTAL_WAVES);
+    if (typeof data.bestKills === 'number') SaveData.bestKills = Math.max(0, Math.round(data.bestKills));
+    if (typeof data.bestTime === 'number') SaveData.bestTime = Math.max(0, data.bestTime);
+    if (typeof data.runs === 'number') SaveData.runs = Math.max(0, Math.round(data.runs));
+    if (typeof data.totalKills === 'number') SaveData.totalKills = Math.max(0, Math.round(data.totalKills));
+    if (typeof data.totalTime === 'number') SaveData.totalTime = Math.max(0, data.totalTime);
+    if (typeof data.difficulty === 'string' && DIFFS[data.difficulty]) SaveData.difficulty = data.difficulty;
+    if (data.stats && typeof data.stats === 'object') {
+      for (const k of DIFF_KEYS) {
+        if (data.stats[k]) adoptStats(SaveData.stats[k], data.stats[k]);
+      }
+    } else if (SaveData.bestWave > 0 || SaveData.runs > 0) {
+      // 旧存档没有分难度统计：当时的难度就是简单
+      SaveData.stats.easy = {
+        bestWave: SaveData.bestWave, bestKills: SaveData.bestKills, bestTime: SaveData.bestTime, bestClear: 0,
+        runs: SaveData.runs, totalKills: SaveData.totalKills, totalTime: SaveData.totalTime,
+      };
+    }
+    adoptDetail(data.detail);
+    if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
+  }
+
+  function loadSave() {
+    try {
+      const raw = window.localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const outer = JSON.parse(raw);
+      if (!outer || typeof outer !== 'object') return;
+      if (outer.v === SAVE_VERSION && outer.data) {
+        if (outer.hash !== hashStr(JSON.stringify(outer.data))) {
+          notifyMenu('本地存档校验失败，已忽略', 6000);
+          return;
+        }
+        adoptSaveData(outer.data, true);
+      } else if (outer.run || typeof outer.bestWave === 'number') {
+        // 兼容 v0.9 没有哈希的旧存档，读一次后改写成新格式
+        adoptSaveData(outer, true);
+        persistSave();
+      }
+    } catch (e) { /* 隐私模式或存储被禁用时静默跳过 */ }
+  }
+
+  function persistSave() {
+    try {
+      const data = JSON.stringify(SaveData);
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, data: SaveData, hash: hashStr(data) }));
+    } catch (e) { /* 同上 */ }
+  }
+
+  // 每波开始（以及商店买完继续）时写一次进度存档
+  function saveCheckpoint() {
+    if (G.state !== 'playing' || !G.player) return;
+    SaveData.run = {
+      wave: G.wave,
+      difficulty: G.difficulty,
+      gold: G.gold,
+      hp: Math.max(1, Math.round(G.player.hp)),
+      mana: Math.round(G.player.mana),
+      cpuIdx: G.cpuIdx,
+      gpuIdx: G.gpuIdx,
+      ramIdx: G.ramIdx,
+      ssdIdx: G.ssdIdx,
+      softwares: G.softwares.map((s) => s.id),
+      kills: G.kills,
+      playTime: Math.round(G.playTime),
+      killCounts: Object.assign({}, G.killCounts),
+      goldEarned: G.goldEarned,
+      goldSpent: G.goldSpent,
+      softwareUses: G.softwareUses,
+      skillCasts: G.skillCasts,
+      damageDealt: G.damageDealt,
+      buys: JSON.parse(JSON.stringify(G.buys)),
+    };
+    persistSave();
+  }
+
+  // 一局结束：总计和当前难度各记一笔，并清掉进度存档
+  function bumpStats(s) {
+    s.runs = (s.runs || 0) + 1;
+    s.totalKills = (s.totalKills || 0) + G.kills;
+    s.totalTime = (s.totalTime || 0) + G.playTime;
+    if (G.wave > (s.bestWave || 0)) s.bestWave = G.wave;
+    if (G.kills > (s.bestKills || 0)) s.bestKills = G.kills;
+    if (G.playTime > (s.bestTime || 0)) s.bestTime = G.playTime;
+  }
+
+  function recordRun(won) {
+    const bucket = SaveData.stats[G.difficulty] || SaveData.stats.easy;
+    bumpStats(SaveData);
+    bumpStats(bucket);
+    const d = SaveData.detail;
+    if (won) {
+      d.wins++;
+      if (!bucket.bestClear || G.playTime < bucket.bestClear) bucket.bestClear = G.playTime;
+    } else {
+      d.deaths++;
+    }
+    // 本局的细项都并进存档累计
+    for (const k of ['worm', 'trojan', 'leak', 'boss']) d.kills[k] += G.killCounts[k] || 0;
+    d.goldEarned += G.goldEarned;
+    d.goldSpent += G.goldSpent;
+    d.damage += G.damageDealt;
+    d.skills += G.skillCasts;
+    d.softwareUses += G.softwareUses;
+    for (const kind of Object.keys(d.buys)) {
+      const src = G.buys[kind] || {};
+      for (const key of Object.keys(src)) {
+        if (src[key]) d.buys[kind][key] = (d.buys[kind][key] || 0) + src[key];
+      }
+    }
+    SaveData.run = null;
+    persistSave();
+  }
+
+  // ---------------- 存档导出 / 导入 ----------------
+  function exportSaveText() {
+    const data = JSON.stringify(SaveData);
+    return JSON.stringify({ v: SAVE_VERSION, data: SaveData, hash: hashStr(data) }, null, 2);
+  }
+
+  function exportSave() {
+    try {
+      const blob = new Blob([exportSaveText()], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'kuangku-save-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      notifyMenu('存档已导出', 3500);
+    } catch (e) {
+      notifyMenu('导出失败：' + e.message, 6000);
+    }
+  }
+
+  function importSaveText(text) {
+    try {
+      const outer = JSON.parse(text);
+      if (!outer || outer.v !== SAVE_VERSION || !outer.data || typeof outer.hash !== 'string') {
+        throw new Error('不是本游戏的存档文件');
+      }
+      if (outer.hash !== hashStr(JSON.stringify(outer.data))) {
+        throw new Error('哈希校验失败，文件可能被改动');
+      }
+      adoptSaveData(outer.data, true);
+      persistSave();
+      AC.muted = SaveData.muted;
+      notifyMenu('存档导入成功', 5000);
+      return true;
+    } catch (e) {
+      notifyMenu('导入失败：' + e.message, 6000);
+      return false;
+    }
+  }
+
+  function importSaveFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (!file) { input.remove(); return; }
+      const reader = new FileReader();
+      reader.onload = () => { importSaveText(String(reader.result)); input.remove(); };
+      reader.onerror = () => { notifyMenu('读取文件失败', 5000); input.remove(); };
+      reader.readAsText(file);
+    });
+    input.click();
+  }
 
   // ---------------- 贴图资源 ----------------
   const ASSETS = {};
@@ -275,7 +692,10 @@
 
   // ---------------- 游戏状态 ----------------
   const G = {
-    state: 'menu',          // menu | playing | shop | dead | win
+    state: 'menu',          // menu | stats | playing | shop | dead | win
+    paused: false,
+    speedMul: 1,            // 1 / 2 / 4 倍速
+    difficulty: 'easy',     // easy | normal | hard
     t: 0,
     fps: 60,
 
@@ -308,6 +728,13 @@
     damageDealt: 0,
     playTime: 0,
 
+    // 本局细项，结算时并进存档
+    killCounts: { worm: 0, trojan: 0, leak: 0, boss: 0 },
+    goldEarned: 0,
+    goldSpent: 0,
+    softwareUses: 0,
+    buys: { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} },
+
     cpuIdx: 0,
     gpuIdx: 0,
     ramIdx: 0,
@@ -327,13 +754,23 @@
     uiButtons: [],
     shopCards: [],
     shopChosen: false,
+    shopHint: '',
+    shopHintT: 0,
 
     bestWave: 1,
   };
 
   function resetGame() {
     G.state = 'playing';
+    G.paused = false;
+    G.speedMul = 1;
+    G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
     G.t = 0;
+    G.killCounts = { worm: 0, trojan: 0, leak: 0, boss: 0 };
+    G.goldEarned = 0;
+    G.goldSpent = 0;
+    G.softwareUses = 0;
+    G.buys = { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} };
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
       hp: 120, maxHp: 120,
@@ -379,7 +816,7 @@
       type, x, y,
       hp: d.hp * hpMul, maxHp: d.hp * hpMul,
       speed: d.speed * rnd(1.16, 0.86),
-      dmg: d.dmg * dmgMul,
+      dmg: d.dmg * dmgMul * diffDamageMul(),
       r: d.r,
       color: d.color,
       gold: d.gold,
@@ -548,13 +985,14 @@
   }
 
   function useSoftware(i) {
+    if (G.state !== 'playing' || G.paused) return false;
     const sw = G.softwares[i];
     if (!sw) return false;
     if (G.softCds[i] > 0) return false;
     const p = G.player;
     G.softCds[i] = sw.cd;
     G.softFlash[i] = 0.45;
-    G.skillCasts++;
+    G.softwareUses++;
 
     if (sw.effect === 'aoe') {
       const R = 470;
@@ -597,6 +1035,7 @@
     } else if (sw.effect === 'gold') {
       G.goldBoostTimer = 6;
       G.gold += 80;
+      G.goldEarned += 80;
       addText(p.x, p.y - 76, '算力上线', sw.color, 24);
       blip(1000, 0.15, 'square', 0.12, 1500);
     } else if (sw.effect === 'shield') {
@@ -623,6 +1062,8 @@
     if (e.dead) return;
     e.dead = true;
     G.kills++;
+    const kc = e.isBoss ? 'boss' : e.type;
+    G.killCounts[kc] = (G.killCounts[kc] || 0) + 1;
     G.combo++;
     G.comboTimer = 2.4;
     const n = e.isBoss ? 80 : 16;
@@ -634,7 +1075,7 @@
       for (let i = 0; i < 12; i++) {
         G.pickups.push({ x: e.x + rnd(90, -90), y: e.y + rnd(90, -90), vx: 0, vy: 0, v: rnd(12, 6), r: 6, life: 12 });
       }
-      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; } }, 900);
+      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; recordRun(true); } }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
       if (Math.random() < 0.045) {
@@ -652,6 +1093,7 @@
       if (G.state === 'shop') { /* 商店暂停世界 */ }
       return;
     }
+    if (G.paused) return;
     G.t += dt;
     G.playTime += dt;
 
@@ -722,7 +1164,7 @@
 
     // ----- 波次 -----
     G.waveTime += dt;
-    if (G.wave === 0) nextWave();
+    if (G.wave === 0) { nextWave(); saveCheckpoint(); }
     if (G.waveTime >= G.WAVE_LEN) {
       G.waveTime = 0;
       if (G.wave < G.TOTAL_WAVES) {
@@ -740,9 +1182,10 @@
         }
         G.enemies.length = 0;
         G.gold += 60;
+        G.goldEarned += 60;
         const bbx = ARENA.w / 2 - 90, bby = ARENA.h / 2 - 90;
         spawnEnemy('boss', clamp(p2.x + 600, -bbx, bbx), clamp(p2.y - 300, -bby, bby), 1, 1);
-        addText(p2.x, p2.y - 90, 'Boss 出现：RTX 690 双芯核弹', '#ff3df0', 30);
+        addText(p2.x, p2.y - 90, 'Boss 出现：GTX 690 双芯核弹', '#ff3df0', 30);
         addText(p2.x, p2.y - 56, '清场 +60 矿币', '#ffd166', 18);
         addShake(20);
       }
@@ -794,7 +1237,7 @@
     // ----- 死亡 -----
     if (p.hp <= 0) {
       G.state = 'dead';
-      G.bestWave = Math.max(G.bestWave, G.wave);
+      recordRun(false);
       addParticles(p.x, p.y, '#8ef2ff', 40, 380, 1.0);
       addShake(20);
     }
@@ -845,7 +1288,7 @@
             const a = (k / 14) * TAU + e.phase;
             G.ebullets.push({
               x: e.x, y: e.y, vx: Math.cos(a) * 250, vy: Math.sin(a) * 250,
-              r: 9, dmg: 9, life: 5, color: '#ff3b3b',
+              r: 9, dmg: 9 * diffDamageMul(), life: 5, color: '#ff3b3b',
             });
           }
           e.phase += 0.4;
@@ -964,7 +1407,9 @@
           blip(760, 0.09, 'sine', 0.09, 1250);
           addText(p.x, p.y - 34, '+' + c.heal + ' HP', '#7dff9b', 15);
         } else {
-          G.gold += G.goldBoostTimer > 0 ? c.v * 2 : c.v;
+          const gain = G.goldBoostTimer > 0 ? c.v * 2 : c.v;
+          G.gold += gain;
+          G.goldEarned += gain;
           blip(1280, 0.05, 'sine', 0.07, 1900);
           addText(p.x, p.y - 34, '+' + c.v, '#ffd166', 14);
         }
@@ -1084,6 +1529,9 @@
       return;
     }
     G.gold -= card.cost;
+    G.goldSpent += card.cost;
+    const buyKey = card.kind === 'software' ? card.sw.id : card.idx;
+    if (G.buys[card.kind]) G.buys[card.kind][buyKey] = (G.buys[card.kind][buyKey] || 0) + 1;
     if (card.kind === 'cpu') G.cpuIdx = card.idx;
     if (card.kind === 'gpu') { G.gpuIdx = card.idx; G.skillCd = 0; }
     if (card.kind === 'ram') {
@@ -1105,27 +1553,119 @@
   function continueWave() {
     G.state = 'playing';
     G.waveTime = 0;
+    G.uiButtons.length = 0; // 清掉商店留下的按钮，避免恢复战斗后误触购买
+    saveCheckpoint();       // 买完的配置才是这一波的真实起点
+  }
+
+  function togglePause() {
+    if (G.state !== 'playing') return;
+    G.paused = !G.paused;
+    G.uiButtons.length = 0; // 切换瞬间清掉旧按钮，避免恢复时误点
+    if (G.paused) blip(560, 0.09, 'sine', 0.09, 360);
+    else blip(760, 0.09, 'sine', 0.09, 1100);
+  }
+
+  function toggleHitbox() {
+    SaveData.showHitbox = !SaveData.showHitbox;
+    persistSave();
+    blip(SaveData.showHitbox ? 980 : 620, 0.06, 'sine', 0.07, SaveData.showHitbox ? 1300 : 420);
+  }
+
+  // 1× -> 2× -> 4× -> 1×
+  function cycleSpeed() {
+    if (G.state !== 'playing') return;
+    G.speedMul = G.speedMul === 1 ? 2 : G.speedMul === 2 ? 4 : 1;
+    const f = G.speedMul === 1 ? 520 : G.speedMul === 2 ? 660 : 880;
+    blip(f, 0.06, 'sine', 0.07, f * 1.4);
+  }
+
+  function startNewGame() {
+    SaveData.run = null;
+    persistSave();
+    resetGame();
+  }
+
+  function setDifficulty(key) {
+    if (G.state !== 'menu' || !DIFFS[key] || SaveData.difficulty === key) return;
+    SaveData.difficulty = key;
+    persistSave();
+    const f = key === 'hard' ? 880 : key === 'normal' ? 660 : 520;
+    blip(f, 0.06, 'sine', 0.07, f * 1.3);
+  }
+
+  // 暂停/统计里返回主界面：保留「每波开始」的进度存档，不额外覆盖
+  function backToMenu() {
+    if (G.state !== 'playing' && G.state !== 'stats') return;
+    G.paused = false;
+    G.state = 'menu';
+    G.uiButtons.length = 0;
+  }
+
+  // 从「每波开始」的存档继续
+  function resumeSavedRun() {
+    const r = SaveData.run;
+    if (!r) { startNewGame(); return; }
+    resetGame();
+    G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
+    G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
+    G.waveTime = 0;
+    G.gold = Math.max(0, Math.round(r.gold) || 0);
+    G.cpuIdx = clamp(Math.round(r.cpuIdx) || 0, 0, CPUS.length - 1);
+    G.gpuIdx = clamp(Math.round(r.gpuIdx) || 0, 0, GPUS.length - 1);
+    G.ramIdx = clamp(Math.round(r.ramIdx) || 0, 0, RAMS.length - 1);
+    G.ssdIdx = clamp(Math.round(r.ssdIdx) || 0, 0, SSDS.length - 1);
+    G.player.maxMana = ram().maxMana;
+    G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
+    G.player.mana = clamp(r.mana === undefined ? G.player.maxMana : Math.round(r.mana), 0, G.player.maxMana);
+    G.softwares = (r.softwares || [])
+      .map((id) => SOFTWARES.find((s) => s.id === id))
+      .filter(Boolean)
+      .slice(0, SSDS[G.ssdIdx].slots);
+    G.softCds = G.softwares.map(() => 0);
+    G.softFlash = G.softwares.map(() => 0);
+    G.kills = Math.max(0, Math.round(r.kills) || 0);
+    G.playTime = Math.max(0, Math.round(r.playTime) || 0);
+    G.killCounts = Object.assign({ worm: 0, trojan: 0, leak: 0, boss: 0 }, r.killCounts || {});
+    G.goldEarned = Math.max(0, Math.round(r.goldEarned) || 0);
+    G.goldSpent = Math.max(0, Math.round(r.goldSpent) || 0);
+    G.softwareUses = Math.max(0, Math.round(r.softwareUses) || 0);
+    G.skillCasts = Math.max(0, Math.round(r.skillCasts) || 0);
+    G.damageDealt = Math.max(0, r.damageDealt || 0);
+    if (r.buys && typeof r.buys === 'object') G.buys = JSON.parse(JSON.stringify(r.buys));
+    G.state = 'playing';
+    G.paused = false;
+    addText(G.cam.x, G.cam.y - 250, '第 ' + G.wave + ' 波', '#8ef2ff', 34);
+    saveCheckpoint();
   }
 
   // ---------------- 点击 ----------------
   function click(x, y) {
     initAudio();
-    if (G.state === 'menu') { resetGame(); return; }
-    if (G.state === 'dead' || G.state === 'win') { resetGame(); return; }
+    // 音量条不是普通按钮：点一下定音量，按住还能拖
+    if (audioSlider.w > 0 && x >= audioSlider.x - 6 && x <= audioSlider.x + audioSlider.w + 6 &&
+        y >= audioSlider.y && y <= audioSlider.y + audioSlider.h) {
+      setMusicVolume((x - audioSlider.x) / audioSlider.w, true);
+      audioDragging = true;
+      return;
+    }
+    // 按钮优先：菜单、商店、暂停、HUD 都靠 G.uiButtons 命中
     for (const b of G.uiButtons) {
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+        G.uiButtons.length = 0; // 防止同一帧里二次命中/误触
         if (b.action) b.action();
         return;
       }
     }
+    if (G.state === 'dead' || G.state === 'win') { startNewGame(); return; }
   }
 
   // ---------------- 绘制 ----------------
-  function draw() {
+  function draw(dt) {
     const s = scale * dpr;
     ctx.setTransform(s, 0, 0, s, offX * dpr, offY * dpr);
     ctx.fillStyle = '#05060c';
     ctx.fillRect(0, 0, W, H);
+    audioSlider.w = 0; // 只有画了音乐控件的界面才可拖音量
 
     // 相机震动
     let sx = 0, sy = 0;
@@ -1141,18 +1681,23 @@
 
     drawPickups();
     drawEnemies();
-    if (G.state !== 'dead') drawPlayer();
+    if (G.state !== 'dead') {
+      drawPlayer();
+      if (SaveData.showHitbox) drawHitbox();
+    }
     drawBullets();
     drawEBullets();
-    drawFx();
+    drawFx(dt);
     drawParticles();
-    drawTexts();
+    drawTexts(dt);
 
     ctx.restore();
 
     drawVignette();
     if (G.state === 'playing') drawHUD();
+    if (G.state === 'playing' && G.paused) drawPause();
     if (G.state === 'menu') drawMenu();
+    if (G.state === 'stats') drawStats();
     if (G.state === 'shop') drawShop();
     if (G.state === 'dead') drawGameOver();
     if (G.state === 'win') drawWin();
@@ -1349,6 +1894,35 @@
       ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.arc(0, -22, 44 + Math.sin(G.t * 6) * 2, 0, TAU); ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  // ----- 判定点：角色实际吃伤害的圆（半径 36，与 update 里的碰撞一致） -----
+  function drawHitbox() {
+    const p = G.player;
+    if (!p) return;
+    const R = 36;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    ctx.globalAlpha = 0.09;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+
+    ctx.globalAlpha = 0.62;
+    ctx.strokeStyle = '#8ef2ff';
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([7, 7]);
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 正中心的判定点
+    ctx.globalAlpha = 0.9;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#8ef2ff';
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(0, 0, 2.4, 0, TAU); ctx.fill();
+
     ctx.restore();
   }
 
@@ -1676,7 +2250,7 @@
     }
   }
 
-  function drawFx() {
+  function drawFx(dt) {
     for (const f of G.fx) {
       if (f.type === 'laser') {
         const k = 1 - f.t / f.life;
@@ -1729,7 +2303,7 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawTexts() {
+  function drawTexts(dt) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const t of G.texts) {
@@ -1740,8 +2314,8 @@
       ctx.fillText(t.str, t.x + 2, t.y + 2);
       ctx.fillStyle = t.color;
       ctx.fillText(t.str, t.x, t.y);
-      t.y += t.vy * 0.016;
-      t.life -= 0.016;
+      t.y += t.vy * dt;
+      t.life -= dt;
     }
     ctx.globalAlpha = 1;
   }
@@ -1785,7 +2359,13 @@
     ctx.textAlign = 'left';
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#8ef2ff';
-    ctx.fillText('WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES, 34, 46);
+    const waveTxt = 'WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES;
+    ctx.fillText(waveTxt, 34, 46);
+    const curDiff = diffOf(G.difficulty);
+    const waveW = ctx.measureText(waveTxt).width;
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = curDiff.color;
+    ctx.fillText(curDiff.name, 34 + waveW + 10, 48);
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#ffd166';
     ctx.fillText('◈ ' + G.gold, 34, 76);
@@ -1797,23 +2377,50 @@
     ctx.fillStyle = '#8ef2ff';
     ctx.beginPath(); ctx.roundRect(34, 90, pwid * clamp(G.waveTime / G.WAVE_LEN, 0, 1), 6, 3); ctx.fill();
 
-    // 右上：装备
+    // 局内计时（毫秒级，方便凹时间）
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.8)';
+    ctx.fillText('TIME', 34, 119);
+    ctx.font = 'bold 19px ' + FONT_MONO;
+    ctx.fillStyle = '#cfe3ff';
+    ctx.fillText(fmtRunTime(G.playTime), 74, 121);
+
+    // 右上：装备名称 + 属性
+    const rx = W - 30;
     ctx.textAlign = 'right';
+
     ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('CPU  ' + cpu().name, W - 30, 42);
+    ctx.fillText('CPU  ' + cpu().name, rx, 38);
+    const c0 = cpu();
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText('射速 ' + (1 / c0.interval).toFixed(1) + '/s · 伤害 ' + c0.dmg + ' · 弹道 ' + c0.count + (c0.pierce ? ' · 穿透 ' + c0.pierce : ''), rx, 56);
+
+    ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = gpu().color;
-    ctx.fillText('GPU  ' + gpu().name, W - 30, 66);
+    ctx.fillText('GPU  ' + gpu().name, rx, 78);
+    const g0 = gpu();
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText(g0.skill ? (SKILL_NAMES[g0.skill] + ' · 蓝耗 ' + g0.mana + ' · 冷却 ' + g0.cd.toFixed(1) + 's') : '无技能（纯亮机）', rx, 96);
+
+    ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('RAM  ' + ram().name, W - 30, 90);
+    ctx.fillText('RAM  ' + ram().name, rx, 118);
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(165,190,225,0.85)';
+    ctx.fillText('蓝上限 ' + ram().maxMana + ' · 回蓝 ' + ram().regen + '/s', rx, 136);
 
     // 技能就绪状态
     if (gpu().skill) {
       const ready = G.skillCd <= 0 && p.mana >= gpu().mana;
-      ctx.fillStyle = ready ? '#ffd166' : 'rgba(160,180,210,0.5)';
-      ctx.font = 'bold 14px ' + FONT;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = ready ? '#ffd166' : 'rgba(160,180,210,0.55)';
+      ctx.font = 'bold 13px ' + FONT;
       const cdTxt = G.skillCd > 0 ? '冷却 ' + G.skillCd.toFixed(1) + 's' : (p.mana < gpu().mana ? '蓝不够' : '技能就绪');
-      ctx.fillText(gpu().tag + ' · ' + cdTxt, W - 30, 116);
+      ctx.fillText('技能 ' + cdTxt, rx, 158);
     }
 
     // Boss 血条（屏幕空间）
@@ -1858,6 +2465,39 @@
       ctx.fillStyle = 'rgba(255,209,102,' + clamp(G.comboTimer, 0, 1) + ')';
       ctx.fillText('x' + G.combo, W / 2, 70);
     }
+
+    // 右上角暂停按钮（手机只有触屏，得能点得到）
+    const pbSize = 46;
+    const pbx = W - 30 - pbSize, pby = 176;
+    const pbHover = mouse.x > pbx && mouse.x < pbx + pbSize && mouse.y > pby && mouse.y < pby + pbSize;
+    ctx.fillStyle = pbHover ? 'rgba(32,58,88,0.95)' : 'rgba(14,24,44,0.82)';
+    ctx.strokeStyle = 'rgba(142,242,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(pbx, pby, pbSize, pbSize, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,230,255,0.9)';
+    ctx.fillRect(pbx + 15, pby + 13, 5, 20);
+    ctx.fillRect(pbx + 26, pby + 13, 5, 20);
+    ctx.font = 'bold 10px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.65)';
+    ctx.textAlign = 'center';
+    ctx.fillText('P', pbx + pbSize / 2, pby + pbSize - 7);
+    G.uiButtons.push({ x: pbx, y: pby, w: pbSize, h: pbSize, action: togglePause });
+
+    // 暂停下面的倍速按钮：1× → 2× → 4×
+    const spy = pby + pbSize + 10;
+    const spHover = mouse.x > pbx && mouse.x < pbx + pbSize && mouse.y > spy && mouse.y < spy + pbSize;
+    const fast = G.speedMul > 1;
+    ctx.fillStyle = fast ? (spHover ? 'rgba(84,62,18,0.95)' : 'rgba(48,36,12,0.85)') : (spHover ? 'rgba(32,58,88,0.95)' : 'rgba(14,24,44,0.82)');
+    ctx.strokeStyle = fast ? 'rgba(255,209,102,0.8)' : 'rgba(142,242,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(pbx, spy, pbSize, pbSize, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = fast ? '#ffd166' : '#cfe3ff';
+    ctx.font = 'bold 18px ' + FONT;
+    ctx.fillText(G.speedMul + '×', pbx + pbSize / 2, spy + pbSize / 2 - 3);
+    ctx.font = 'bold 10px ' + FONT;
+    ctx.fillStyle = 'rgba(150,190,240,0.65)';
+    ctx.fillText('T', pbx + pbSize / 2, spy + pbSize - 7);
+    G.uiButtons.push({ x: pbx, y: spy, w: pbSize, h: pbSize, action: cycleSpeed });
   }
 
   function drawSoftwareBar() {
@@ -1921,8 +2561,87 @@
     ctx.restore();
   }
 
+  // ----- 暂停 -----
+  function drawPause() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(3,6,14,0.66)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = 'bold 56px ' + FONT;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.shadowBlur = 24;
+    ctx.shadowColor = 'rgba(110,220,255,0.7)';
+    ctx.fillText('已暂停', W / 2, H / 2 - 78);
+    ctx.shadowBlur = 0;
+
+    ctx.font = 'bold 17px ' + FONT;
+    ctx.fillStyle = 'rgba(190,215,255,0.82)';
+    ctx.fillText('难度 ' + diffOf(G.difficulty).name + ' · 第 ' + G.wave + ' 波 · 击杀 ' + G.kills + ' · ◈ ' + G.gold + ' · 用时 ' + fmtRunTime(G.playTime), W / 2, H / 2 - 22);
+
+    const bw = 220, bh = 52, bx = W / 2 - bw / 2, by = H / 2 + 24;
+    const hov = mouse.x > bx && mouse.x < bx + bw && mouse.y > by && mouse.y < by + bh;
+    ctx.fillStyle = hov ? 'rgba(50,92,130,0.95)' : 'rgba(26,44,68,0.95)';
+    ctx.strokeStyle = 'rgba(142,242,255,0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 20px ' + FONT;
+    ctx.fillText('继续游戏', W / 2, by + bh / 2 + 1);
+    G.uiButtons.push({ x: bx, y: by, w: bw, h: bh, action: togglePause });
+
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.75)';
+    ctx.fillText('P / Esc 也可以继续', W / 2, by + bh + 18);
+
+    // 返回主界面（不覆盖存档，主菜单还能继续这一波）
+    const mbw = 200, mbh = 42, mbx = W / 2 - mbw / 2, mby = by + bh + 34;
+    const mhov = mouse.x > mbx && mouse.x < mbx + mbw && mouse.y > mby && mouse.y < mby + mbh;
+    ctx.fillStyle = mhov ? 'rgba(58,34,42,0.95)' : 'rgba(30,22,30,0.9)';
+    ctx.strokeStyle = 'rgba(255,150,150,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(mbx, mby, mbw, mbh, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffdede';
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillText('返回主界面', W / 2, mby + mbh / 2 + 1);
+    G.uiButtons.push({ x: mbx, y: mby, w: mbw, h: mbh, action: backToMenu });
+
+    // 判定点开关
+    const tw = 260, th = 44, tx = W / 2 - tw / 2, ty = mby + mbh + 18;
+    const thov = mouse.x > tx && mouse.x < tx + tw && mouse.y > ty && mouse.y < ty + th;
+    ctx.fillStyle = thov ? 'rgba(24,42,66,0.95)' : 'rgba(16,28,48,0.92)';
+    ctx.strokeStyle = 'rgba(120,150,190,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, 10); ctx.fill(); ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = '#cfe3ff';
+    ctx.fillText('角色判定点', tx + 18, ty + th / 2);
+
+    const sw = 52, sh = 22, sx = tx + tw - sw - 18, sy = ty + (th - sh) / 2;
+    const on = SaveData.showHitbox;
+    ctx.fillStyle = on ? 'rgba(80,220,255,0.9)' : 'rgba(70,90,120,0.75)';
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, sh / 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(sx + (on ? sw - sh / 2 : sh / 2), sy + sh / 2, sh / 2 - 3, 0, TAU); ctx.fill();
+
+    G.uiButtons.push({ x: tx, y: ty, w: tw, h: th, action: toggleHitbox });
+
+    // 背景音乐
+    drawAudioControls(W / 2 - 134, ty + th + 30);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.7)';
+    ctx.fillText('每波开始自动存档 · 设置会记住', W / 2, ty + th + 66);
+    ctx.restore();
+  }
+
   // ----- 菜单 -----
   function drawMenu() {
+    G.uiButtons.length = 0;
     const bg = ASSETS.bgMenu;
     if (bg && bg.complete && bg.naturalWidth) {
       const sc = Math.max(W / bg.width, H / bg.height);
@@ -1945,26 +2664,300 @@
     const g = ctx.createLinearGradient(W / 2 - 260, 0, W / 2 + 260, 0);
     g.addColorStop(0, '#7dffd4'); g.addColorStop(0.5, '#8ef2ff'); g.addColorStop(1, '#ff8ad8');
     ctx.fillStyle = g;
-    ctx.fillText('大肥鱼的狂野矿卡', W / 2, H / 2 - 120);
+    ctx.fillText('大肥鱼的狂野矿卡', W / 2, H / 2 - 130);
     ctx.shadowBlur = 0;
 
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = 'rgba(190,215,255,0.75)';
-    ctx.fillText('1024 程序员节 · 用一张显卡的命，换一整晚的帧数', W / 2, H / 2 - 66);
+    ctx.fillText('1024 程序员节 · 用一张显卡的命，换一整晚的帧数', W / 2, H / 2 - 80);
 
     ctx.font = 'bold 16px ' + FONT;
     ctx.fillStyle = 'rgba(185,205,235,0.9)';
-    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 + 20);
+    ctx.fillText('WASD / 方向键 移动   自动攻击   显卡技能自动释放', W / 2, H / 2 - 20);
     ctx.fillStyle = 'rgba(165,190,225,0.85)';
-    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存', W / 2, H / 2 + 48);
+    ctx.fillText('每波结束可以升级 CPU / 显卡 / 内存 · P 暂停', W / 2, H / 2 + 4);
 
-    const blink = 0.78 + Math.sin(performance.now() / 420) * 0.22;
-    ctx.fillStyle = 'rgba(142,242,255,' + blink + ')';
-    ctx.font = 'bold 26px ' + FONT;
-    ctx.fillText('点击任意处 / 按 R 开始', W / 2, H / 2 + 130);
+    // 难度选择（只影响怪物伤害）
+    drawDifficultyButtons(H / 2 + 18);
+
+    // 分难度统计 + 最快通关 + 总计
+    drawMenuStats(H / 2 + 72);
+
+    const hasRun = !!(SaveData.run && SaveData.run.wave);
+    const btnY = H / 2 + 188;
+    if (hasRun) {
+      const rd = diffOf(SaveData.run.difficulty);
+      ctx.font = 'bold 12px ' + FONT;
+      ctx.fillStyle = 'rgba(170,195,230,0.75)';
+      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（伤害 ×' + rd.dmg.toFixed(1) + '）', W / 2, btnY - 22);
+      drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 198, btnY, 190, 50, '#8ef2ff', resumeSavedRun);
+      drawMenuButton('新开一局', W / 2 + 8, btnY, 190, 50, 'rgba(190,215,255,0.75)', startNewGame);
+    } else {
+      drawMenuButton('开始游戏', W / 2 - 150, btnY, 300, 50, '#8ef2ff', startNewGame);
+    }
+
+    // 统计 / 导出 / 导入
+    const sw = 140, sh = 34, sy = H - 92;
+    const sgap = 10;
+    const sx0 = W / 2 - (sw * 3 + sgap * 2) / 2;
+    drawSmallButton('统计数据', sx0, sy, sw, sh, showStats);
+    drawSmallButton('导出存档', sx0 + sw + sgap, sy, sw, sh, exportSave);
+    drawSmallButton('导入存档', sx0 + (sw + sgap) * 2, sy, sw, sh, importSaveFile);
+
+    // 背景音乐（设置单独存，不跟游戏存档走）
+    drawAudioControls(34, H - 56);
+    ctx.textAlign = 'center';
+
+    if (menuNotice && performance.now() < menuNoticeUntil) {
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = menuNotice.indexOf('失败') >= 0 ? 'rgba(255,120,120,0.95)' : 'rgba(125,255,212,0.95)';
+      ctx.fillText(menuNotice, W / 2, H - 48);
+    }
+
     ctx.font = '14px ' + FONT;
     ctx.fillStyle = 'rgba(120,140,170,0.7)';
-    ctx.fillText('v0.9 · 1024 程序员节', W / 2, H - 34);
+    ctx.fillText('v0.9.1 · 1024 程序员节', W / 2, H - 30);
+  }
+
+  function drawDifficultyButtons(y) {
+    const bw = 116, gap = 10;
+    const total = bw * DIFF_KEYS.length + gap * (DIFF_KEYS.length - 1);
+    let x = W / 2 - total / 2;
+    for (const key of DIFF_KEYS) {
+      const d = DIFFS[key];
+      const sel = SaveData.difficulty === key;
+      const hov = mouse.x > x && mouse.x < x + bw && mouse.y > y && mouse.y < y + 40;
+      ctx.fillStyle = sel ? d.color : (hov ? 'rgba(24,42,66,0.95)' : 'rgba(14,26,44,0.85)');
+      ctx.strokeStyle = sel ? d.color : 'rgba(120,150,190,0.5)';
+      ctx.lineWidth = sel ? 2 : 1.2;
+      ctx.beginPath(); ctx.roundRect(x, y, bw, 40, 9); ctx.fill(); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 15px ' + FONT;
+      ctx.fillStyle = sel ? '#04121a' : d.color;
+      ctx.fillText(d.name, x + bw / 2, y + 15);
+      ctx.font = 'bold 11px ' + FONT;
+      ctx.fillStyle = sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)';
+      ctx.fillText('伤害 ×' + d.dmg.toFixed(1), x + bw / 2, y + 31);
+      G.uiButtons.push({ x, y, w: bw, h: 40, action: () => setDifficulty(key) });
+      x += bw + gap;
+    }
+  }
+
+  function drawMenuStats(y) {
+    ctx.textAlign = 'center';
+    for (let i = 0; i < DIFF_KEYS.length; i++) {
+      const key = DIFF_KEYS[i];
+      const d = DIFFS[key];
+      const s = SaveData.stats[key] || emptyStats();
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = s.runs > 0 ? d.color : 'rgba(140,160,190,0.55)';
+      const txt = s.runs > 0
+        ? d.name + '  第 ' + s.bestWave + ' 波 · ' + s.bestKills + ' 杀 · ' + fmtClock(s.bestTime)
+        : d.name + '  还没打过';
+      ctx.fillText(txt, W / 2, y + i * 18);
+    }
+
+    // 最快通关纪录（各难度，毫秒级）
+    const fastest = [];
+    for (const key of DIFF_KEYS) {
+      const s = SaveData.stats[key] || emptyStats();
+      fastest.push(diffOf(key).name + ' ' + (s.bestClear > 0 ? fmtRunTime(s.bestClear) : '—'));
+    }
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(142,242,255,0.9)';
+    ctx.fillText('最快通关  ' + fastest.join(' · '), W / 2, y + 3 * 18);
+
+    ctx.fillStyle = 'rgba(255,209,102,0.85)';
+    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + 4 * 18);
+  }
+
+  function showStats() {
+    if (G.state !== 'menu') return;
+    G.state = 'stats';
+    G.uiButtons.length = 0;
+  }
+
+  function fmtNum(n) {
+    return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  function buyListParts(kind) {
+    const src = SaveData.detail.buys[kind] || {};
+    const parts = [];
+    for (const key of Object.keys(src)) {
+      const n = src[key];
+      if (!n) continue;
+      let name = key;
+      if (kind === 'cpu') name = (CPUS[+key] || {}).name || ('CPU ' + key);
+      else if (kind === 'gpu') name = (GPUS[+key] || {}).name || ('GPU ' + key);
+      else if (kind === 'ram') name = (RAMS[+key] || {}).name || ('RAM ' + key);
+      else if (kind === 'ssd') name = (SSDS[+key] || {}).name || ('SSD ' + key);
+      else if (kind === 'software') {
+        const sw = SOFTWARES.find((s) => s.id === key);
+        name = sw ? sw.name : key;
+      }
+      parts.push(name + ' ×' + n);
+    }
+    return parts.length ? parts : ['还没买过'];
+  }
+
+  // 按「整件物品」换行，避免把型号从中间劈开
+  function drawItemsLeft(items, x, y, maxW, lh) {
+    let line = '', yy = y, lines = 0;
+    for (const item of items) {
+      const candidate = line ? line + '、' + item : item;
+      if (line && ctx.measureText(candidate).width > maxW) {
+        ctx.fillText(line, x, yy); lines++; yy += lh; line = item;
+      } else line = candidate;
+    }
+    if (line) { ctx.fillText(line, x, yy); lines++; }
+    return lines;
+  }
+
+  // ----- 统计数据 -----
+  function drawStats() {
+    G.uiButtons.length = 0;
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 36px ' + FONT;
+    ctx.fillStyle = '#8ef2ff';
+    ctx.fillText('统计数据', W / 2, 58);
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(170,195,230,0.8)';
+    ctx.fillText('当前存档从第一次游玩到现在的累计', W / 2, 88);
+
+    ctx.fillStyle = 'rgba(8,14,26,0.9)';
+    ctx.strokeStyle = 'rgba(90,130,180,0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(52, 112, 588, 512, 14); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.roundRect(660, 112, 568, 512, 14); ctx.fill(); ctx.stroke();
+
+    const d = SaveData.detail;
+    const k = d.kills;
+    const totalKills = k.worm + k.trojan + k.leak + k.boss;
+
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('总体', 76, 148);
+
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(205,228,255,0.9)';
+    const lx = 76;
+    ctx.fillText('总局数 ' + SaveData.runs + '  ·  通关 ' + d.wins + '  ·  阵亡 ' + d.deaths, lx, 178);
+    ctx.fillText('总时长 ' + fmtClock(SaveData.totalTime) + '  ·  总伤害 ' + fmtNum(d.damage), lx, 204);
+    ctx.fillText('获得矿币 ' + fmtNum(d.goldEarned) + '  ·  花费矿币 ' + fmtNum(d.goldSpent), lx, 230);
+    ctx.fillText('显卡技能 ' + fmtNum(d.skills) + ' 次  ·  软件释放 ' + fmtNum(d.softwareUses) + ' 次', lx, 256);
+
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('击杀', lx, 296);
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillStyle = 'rgba(205,228,255,0.9)';
+    ctx.fillText('病毒 ' + fmtNum(k.worm) + '  ·  木马 ' + fmtNum(k.trojan) + '  ·  内存泄漏 ' + fmtNum(k.leak) + '  ·  Boss ' + fmtNum(k.boss), lx, 326);
+    ctx.fillStyle = 'rgba(160,190,225,0.75)';
+    ctx.fillText('合计 ' + fmtNum(totalKills) + ' 只', lx, 352);
+
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillText('分难度', lx, 396);
+
+    ctx.font = 'bold 12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,180,215,0.75)';
+    const cols = [76, 168, 252, 336, 452, 552];
+    const head = ['难度', '局数', '最高波', '击杀', '最长存活', '最快通关'];
+    for (let i = 0; i < head.length; i++) ctx.fillText(head[i], cols[i], 422);
+
+    for (let i = 0; i < DIFF_KEYS.length; i++) {
+      const key = DIFF_KEYS[i];
+      const s = SaveData.stats[key] || emptyStats();
+      const dd = diffOf(key);
+      const yy = 448 + i * 24;
+      ctx.font = 'bold 13px ' + FONT;
+      ctx.fillStyle = s.runs > 0 ? dd.color : 'rgba(140,160,190,0.5)';
+      ctx.fillText(dd.name, cols[0], yy);
+      ctx.fillStyle = 'rgba(205,228,255,0.88)';
+      ctx.fillText(String(s.runs), cols[1], yy);
+      ctx.fillText(String(s.bestWave), cols[2], yy);
+      ctx.fillText(fmtNum(s.bestKills), cols[3], yy);
+      ctx.fillText(s.bestTime > 0 ? fmtClock(s.bestTime) : '—', cols[4], yy);
+      ctx.fillText(s.bestClear > 0 ? fmtRunTime(s.bestClear) : '—', cols[5], yy);
+    }
+
+    // 购买记录
+    ctx.font = 'bold 16px ' + FONT;
+    ctx.fillStyle = '#ffd166';
+    ctx.textAlign = 'left';
+    ctx.fillText('购买记录', 684, 148);
+
+    const kinds = [
+      ['cpu', 'CPU 升级'],
+      ['gpu', '显卡'],
+      ['ram', '内存'],
+      ['ssd', 'SSD'],
+      ['software', '软件'],
+    ];
+    let by = 184;
+    for (const [kind, label] of kinds) {
+      ctx.font = 'bold 14px ' + FONT;
+      ctx.fillStyle = 'rgba(190,215,245,0.95)';
+      ctx.fillText(label, 684, by);
+      ctx.font = '13px ' + FONT;
+      ctx.fillStyle = 'rgba(205,228,255,0.85)';
+      const lines = drawItemsLeft(buyListParts(kind), 684, by + 22, 510, 18);
+      by += 22 + lines * 18 + 14;
+    }
+
+    drawSmallButton('返回主菜单', W / 2 - 90, H - 62, 180, 38, backToMenu);
+  }
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h > 0 ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // 局内计时：mm:ss.cc，专门给凹时间的玩家看
+  function fmtRunTime(sec) {
+    sec = Math.max(0, sec || 0);
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const cs = Math.floor((sec * 100) % 100);
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s + '.' + (cs < 10 ? '0' : '') + cs;
+  }
+
+  function drawSmallButton(label, x, y, w, h, action) {
+    const hov = mouse.x > x && mouse.x < x + w && mouse.y > y && mouse.y < y + h;
+    ctx.save();
+    ctx.fillStyle = hov ? 'rgba(30,52,80,0.95)' : 'rgba(14,26,44,0.85)';
+    ctx.strokeStyle = hov ? 'rgba(142,242,255,0.7)' : 'rgba(130,160,200,0.45)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 9); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(205,225,248,0.9)';
+    ctx.font = 'bold 14px ' + FONT;
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    G.uiButtons.push({ x, y, w, h, action });
+  }
+
+  function drawMenuButton(label, x, y, w, h, accent, action) {
+    const hov = mouse.x > x && mouse.x < x + w && mouse.y > y && mouse.y < y + h;
+    ctx.save();
+    ctx.shadowBlur = hov ? 22 : 10;
+    ctx.shadowColor = accent;
+    ctx.fillStyle = hov ? 'rgba(24,48,74,0.96)' : 'rgba(12,24,42,0.9)';
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = hov ? 2.4 : 1.8;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 14); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 20px ' + FONT;
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    G.uiButtons.push({ x, y, w, h, action });
   }
 
   // ----- 商店 -----
@@ -1983,7 +2976,7 @@
     const cards = G.shopCards;
     const gap = 24;
     const cw = Math.min(300, (W - 120 - gap * Math.max(0, cards.length - 1)) / Math.max(1, cards.length));
-    const chh = 372;
+    const chh = 392;
     const sc = cw / 300;
     const totalW = cards.length * cw + Math.max(0, cards.length - 1) * gap;
     let x0 = W / 2 - totalW / 2;
@@ -2013,28 +3006,55 @@
 
       ctx.font = 'bold ' + Math.round(21 * Math.max(0.72, sc)) + 'px ' + FONT;
       ctx.fillStyle = '#eaf3ff';
-      wrapText(c.name, x0 + cw / 2, y0 + 204, cw - 26, 24);
+      wrapText(c.name, x0 + cw / 2, y0 + 202, cw - 26, 24);
 
       ctx.font = 'bold 14px ' + FONT;
       ctx.fillStyle = 'rgba(180,205,235,0.85)';
-      wrapText(c.tag, x0 + cw / 2, y0 + 232, cw - 44, 21);
+      wrapText(c.tag, x0 + cw / 2, y0 + 230, cw - 44, 20);
+
+      // 这件配件到底改了什么属性
+      const info = [];
+      if (c.kind === 'cpu') {
+        const cur = CPUS[G.cpuIdx], nxt = CPUS[c.idx];
+        info.push('射速 ' + (1 / cur.interval).toFixed(1) + ' → ' + (1 / nxt.interval).toFixed(1) + ' 发/秒');
+        info.push('伤害 ' + cur.dmg + ' → ' + nxt.dmg + ' · 弹道 ' + cur.count + ' → ' + nxt.count);
+        if (nxt.pierce !== cur.pierce) info.push('穿透 ' + cur.pierce + ' → ' + nxt.pierce);
+      } else if (c.kind === 'gpu') {
+        info.push('技能：' + (SKILL_NAMES[GPUS[c.idx].skill] || '无'));
+        info.push('蓝耗 ' + GPUS[c.idx].mana + ' · 冷却 ' + GPUS[c.idx].cd.toFixed(1) + ' 秒');
+        info.push('技能伤害看 CPU');
+      } else if (c.kind === 'ram') {
+        info.push('蓝上限 ' + ram().maxMana + ' → ' + RAMS[c.idx].maxMana);
+        info.push('回蓝 ' + ram().regen + ' → ' + RAMS[c.idx].regen + ' /秒');
+        info.push('冷却缩短 ' + (G.ramIdx * 5.5).toFixed(1) + '% → ' + (c.idx * 5.5).toFixed(1) + '%');
+      } else if (c.kind === 'ssd') {
+        info.push('能同时携带 ' + SSDS[c.idx].slots + ' 个主动技能');
+        info.push('装满后新软件顶掉最旧的');
+      } else if (c.kind === 'software') {
+        info.push('冷却 ' + c.sw.cd + ' 秒 · 占 1 槽');
+      }
 
       ctx.font = '13px ' + FONT;
-      ctx.fillStyle = 'rgba(150,175,210,0.8)';
-      let line = '';
-      if (c.kind === 'cpu') line = '射速 ' + (1 / CPUS[c.idx].interval).toFixed(1) + '/s · 伤害 ' + CPUS[c.idx].dmg + ' · 弹道 ' + CPUS[c.idx].count;
-      if (c.kind === 'gpu') line = '技能：' + (SKILL_NAMES[GPUS[c.idx].skill] || '无') + ' · 蓝耗 ' + GPUS[c.idx].mana;
-      if (c.kind === 'ram') line = '蓝上限 ' + RAMS[c.idx].maxMana + ' · 回蓝 ' + RAMS[c.idx].regen + '/s';
-      ctx.fillText(line, x0 + cw / 2, y0 + 276);
+      ctx.fillStyle = 'rgba(150,175,210,0.85)';
+      if (c.kind === 'software') {
+        ctx.fillText(info[0], x0 + cw / 2, y0 + 272);
+        ctx.font = '12px ' + FONT;
+        ctx.fillStyle = c.sw.color;
+        wrapText(c.sw.desc, x0 + cw / 2, y0 + 292, cw - 26, 15);
+      } else {
+        for (let i = 0; i < info.length && i < 3; i++) {
+          ctx.fillText(info[i], x0 + cw / 2, y0 + 272 + i * 17);
+        }
+      }
 
       ctx.font = 'bold 24px ' + FONT;
       ctx.fillStyle = afford ? '#ffd166' : '#5a6478';
-      ctx.fillText('◈ ' + c.cost, x0 + cw / 2, y0 + 326);
+      ctx.fillText('◈ ' + c.cost, x0 + cw / 2, y0 + 348);
 
       if (!afford) {
         ctx.font = 'bold 13px ' + FONT;
         ctx.fillStyle = 'rgba(255,90,90,0.85)';
-        ctx.fillText('金币不够', x0 + cw / 2, y0 + 350);
+        ctx.fillText('金币不够', x0 + cw / 2, y0 + 372);
       }
 
       G.uiButtons.push({ x: x0, y: y0, w: cw, h: chh, action: () => buyCard(c) });
@@ -2186,6 +3206,7 @@
 
   // ----- 结算 -----
   function drawGameOver() {
+    G.uiButtons.length = 0;
     ctx.fillStyle = 'rgba(10,4,10,0.86)';
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
@@ -2196,18 +3217,24 @@
     ctx.fillStyle = 'rgba(210,200,220,0.85)';
     ctx.fillText('你的矿卡烧了，但数据还在硬盘里', W / 2, H / 2 - 60);
 
+    const dd = diffOf(G.difficulty);
+    const dr = SaveData.stats[G.difficulty] || emptyStats();
     ctx.font = 'bold 20px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    const sec = Math.floor(G.playTime);
-    ctx.fillText('坚持 ' + Math.floor(sec / 60) + ' 分 ' + (sec % 60) + ' 秒   ·   第 ' + G.wave + ' 波', W / 2, H / 2 + 10);
+    ctx.fillText('难度 ' + dd.name + ' · 坚持 ' + fmtRunTime(G.playTime) + '   ·   第 ' + G.wave + ' 波', W / 2, H / 2 + 10);
     ctx.fillText('击杀 ' + G.kills + '   ·   总伤害 ' + Math.floor(G.damageDealt), W / 2, H / 2 + 48);
+
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = 'rgba(255,209,102,0.9)';
+    ctx.fillText('本难度纪录：第 ' + dr.bestWave + ' 波 · 击杀 ' + dr.bestKills, W / 2, H / 2 + 86);
 
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('点击或按 R 再来一局', W / 2, H / 2 + 130);
+    ctx.fillText('点击或按 R 再来一局', W / 2, H / 2 + 150);
   }
 
   function drawWin() {
+    G.uiButtons.length = 0;
     ctx.fillStyle = 'rgba(4,12,16,0.86)';
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
@@ -2219,12 +3246,17 @@
     ctx.font = 'bold 20px ' + FONT;
     ctx.fillStyle = 'rgba(210,235,255,0.9)';
     ctx.fillText('双芯核弹被你打回废品站，这波不亏', W / 2, H / 2 - 50);
+    const dd = diffOf(G.difficulty);
+    const dr = SaveData.stats[G.difficulty] || emptyStats();
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#cfe3ff';
-    ctx.fillText('用时 ' + Math.floor(G.playTime / 60) + ' 分 ' + Math.floor(G.playTime % 60) + ' 秒   ·   击杀 ' + G.kills, W / 2, H / 2 + 20);
+    ctx.fillText('难度 ' + dd.name + ' · 用时 ' + fmtRunTime(G.playTime) + '   ·   击杀 ' + G.kills, W / 2, H / 2 + 20);
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillStyle = 'rgba(255,209,102,0.9)';
+    ctx.fillText('本难度纪录：第 ' + dr.bestWave + ' 波 · 击杀 ' + dr.bestKills, W / 2, H / 2 + 58);
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 110);
+    ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 120);
   }
 
   // ---------------- 主循环 ----------------
@@ -2235,23 +3267,30 @@
     if (!isFinite(dt) || dt < 0) dt = 0;
     dt = Math.min(dt, 1 / 30);
 
-    update(dt);
-    draw();
+    // 倍速：多跑几次固定步长的 update，而不是把 dt 放大，避免子弹/碰撞穿透
+    const steps = G.speedMul || 1;
+    for (let i = 0; i < steps; i++) update(dt);
+    draw(dt);
 
     requestAnimationFrame(loop);
   }
 
   const game = {
     restart() {
-      if (G.state === 'menu') resetGame();
-      else resetGame();
+      startNewGame();
     },
     click,
   };
 
+  loadSave();
+  loadAudioSettings();
+  AC.muted = SaveData.muted;
   resetGame();
   G.state = 'menu';
   window.__GAME = G;   // 调试用，正式版无副作用
+  window.__SAVE = SaveData;
+  window.__exportSaveText = exportSaveText;
+  window.__importSaveText = importSaveText;
 
   // 调试/演示入口：?auto=1 直接开局，?wave=N 跳到第 N 波
   const qs = new URLSearchParams(location.search);
