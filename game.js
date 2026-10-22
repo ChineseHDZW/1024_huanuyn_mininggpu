@@ -369,15 +369,21 @@
   };
 
   // ---------------- 难度 ----------------
-  // 只改怪物伤害；简单 = 原来的数值
+  // 只改怪物伤害；简单 = 原来的数值；突然死亡只给 1 点血
   const DIFFS = {
     easy:   { name: '简单', dmg: 1.0, color: '#7dffd4' },
     normal: { name: '普通', dmg: 1.5, color: '#8ef2ff' },
     hard:   { name: '困难', dmg: 2.0, color: '#ff8ad8' },
+    sudden: { name: '突然死亡', dmg: 1.0, color: '#ff5a5a', sudden: true },
   };
-  const DIFF_KEYS = ['easy', 'normal', 'hard'];
+  const DIFF_KEYS = ['easy', 'normal', 'hard', 'sudden'];
   function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
   function diffDamageMul() { return diffOf(G.difficulty).dmg; }
+  // 通关过困难才解锁
+  function suddenUnlocked() {
+    const h = SaveData.stats ? SaveData.stats.hard : null;
+    return !!(h && h.bestClear > 0);
+  }
 
   // ---------------- 本地存档（localStorage + 哈希校验） ----------------
   // 设置 + 分难度统计 + 每波开始时的进度存档；导出/导入带 FNV-1a 校验
@@ -386,6 +392,10 @@
 
   function emptyStats() {
     return { bestWave: 0, bestKills: 0, bestTime: 0, bestClear: 0, runs: 0, totalKills: 0, totalTime: 0 };
+  }
+
+  function emptyStatsMap() {
+    return { easy: emptyStats(), normal: emptyStats(), hard: emptyStats(), sudden: emptyStats() };
   }
 
   function emptyDetail() {
@@ -408,7 +418,7 @@
     runs: 0,
     totalKills: 0,
     totalTime: 0,
-    stats: { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() },
+    stats: emptyStatsMap(),
     detail: emptyDetail(),
     run: null,
   };
@@ -440,7 +450,7 @@
     SaveData.runs = 0;
     SaveData.totalKills = 0;
     SaveData.totalTime = 0;
-    SaveData.stats = { easy: emptyStats(), normal: emptyStats(), hard: emptyStats() };
+    SaveData.stats = emptyStatsMap();
     SaveData.detail = emptyDetail();
     SaveData.run = null;
   }
@@ -506,6 +516,8 @@
       };
     }
     adoptDetail(data.detail);
+    // 突然死亡没解锁时不能直接用（比如导入了别人的存档）
+    if (SaveData.difficulty === 'sudden' && !suddenUnlocked()) SaveData.difficulty = 'easy';
     if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
   }
 
@@ -695,7 +707,8 @@
     state: 'menu',          // menu | stats | playing | shop | dead | win
     paused: false,
     speedMul: 1,            // 1 / 2 / 4 倍速
-    difficulty: 'easy',     // easy | normal | hard
+    difficulty: 'easy',     // easy | normal | hard | sudden
+    justUnlocked: false,    // 本局刚通关困难、解锁突然死亡
     t: 0,
     fps: 60,
 
@@ -764,16 +777,19 @@
     G.state = 'playing';
     G.paused = false;
     G.speedMul = 1;
+    G.justUnlocked = false;
     G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
+    if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
     G.t = 0;
     G.killCounts = { worm: 0, trojan: 0, leak: 0, boss: 0 };
     G.goldEarned = 0;
     G.goldSpent = 0;
     G.softwareUses = 0;
     G.buys = { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} };
+    const maxHp = G.difficulty === 'sudden' ? 1 : 120;
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
-      hp: 120, maxHp: 120,
+      hp: maxHp, maxHp: maxHp,
       mana: 100, maxMana: 100,
       speed: 235,
       facing: 1,
@@ -1075,7 +1091,13 @@
       for (let i = 0; i < 12; i++) {
         G.pickups.push({ x: e.x + rnd(90, -90), y: e.y + rnd(90, -90), vx: 0, vy: 0, v: rnd(12, 6), r: 6, life: 12 });
       }
-      setTimeout(() => { if (G.state === 'playing') { G.state = 'win'; recordRun(true); } }, 900);
+      setTimeout(() => {
+        if (G.state !== 'playing') return;
+        const wasLocked = !suddenUnlocked();
+        G.state = 'win';
+        recordRun(true);
+        if (G.difficulty === 'hard' && wasLocked) G.justUnlocked = true;
+      }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
       if (Math.random() < 0.045) {
@@ -1587,9 +1609,13 @@
 
   function setDifficulty(key) {
     if (G.state !== 'menu' || !DIFFS[key] || SaveData.difficulty === key) return;
+    if (key === 'sudden' && !suddenUnlocked()) {
+      notifyMenu('通关一次困难模式后解锁「突然死亡」', 4000);
+      return;
+    }
     SaveData.difficulty = key;
     persistSave();
-    const f = key === 'hard' ? 880 : key === 'normal' ? 660 : 520;
+    const f = key === 'sudden' ? 300 : key === 'hard' ? 880 : key === 'normal' ? 660 : 520;
     blip(f, 0.06, 'sine', 0.07, f * 1.3);
   }
 
@@ -1607,6 +1633,7 @@
     if (!r) { startNewGame(); return; }
     resetGame();
     G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
+    if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
     G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
     G.waveTime = 0;
     G.gold = Math.max(0, Math.round(r.gold) || 0);
@@ -1615,7 +1642,12 @@
     G.ramIdx = clamp(Math.round(r.ramIdx) || 0, 0, RAMS.length - 1);
     G.ssdIdx = clamp(Math.round(r.ssdIdx) || 0, 0, SSDS.length - 1);
     G.player.maxMana = ram().maxMana;
-    G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
+    if (G.difficulty === 'sudden') {
+      G.player.maxHp = 1;
+      G.player.hp = 1;
+    } else {
+      G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
+    }
     G.player.mana = clamp(r.mana === undefined ? G.player.maxMana : Math.round(r.mana), 0, G.player.maxMana);
     G.softwares = (r.softwares || [])
       .map((id) => SOFTWARES.find((s) => s.id === id))
@@ -2681,15 +2713,16 @@
     drawDifficultyButtons(H / 2 + 18);
 
     // 分难度统计 + 最快通关 + 总计
-    drawMenuStats(H / 2 + 72);
+    drawMenuStats(H / 2 + 70);
 
     const hasRun = !!(SaveData.run && SaveData.run.wave);
-    const btnY = H / 2 + 188;
+    const btnY = H / 2 + 196;
     if (hasRun) {
       const rd = diffOf(SaveData.run.difficulty);
+      const rdTag = rd.sudden ? '1 滴血' : '伤害 ×' + rd.dmg.toFixed(1);
       ctx.font = 'bold 12px ' + FONT;
       ctx.fillStyle = 'rgba(170,195,230,0.75)';
-      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（伤害 ×' + rd.dmg.toFixed(1) + '）', W / 2, btnY - 22);
+      ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（' + rdTag + '）', W / 2, btnY - 18);
       drawMenuButton('继续第 ' + SaveData.run.wave + ' 波', W / 2 - 198, btnY, 190, 50, '#8ef2ff', resumeSavedRun);
       drawMenuButton('新开一局', W / 2 + 8, btnY, 190, 50, 'rgba(190,215,255,0.75)', startNewGame);
     } else {
@@ -2725,20 +2758,24 @@
     let x = W / 2 - total / 2;
     for (const key of DIFF_KEYS) {
       const d = DIFFS[key];
-      const sel = SaveData.difficulty === key;
+      const locked = key === 'sudden' && !suddenUnlocked();
+      const sel = SaveData.difficulty === key && !locked;
       const hov = mouse.x > x && mouse.x < x + bw && mouse.y > y && mouse.y < y + 40;
-      ctx.fillStyle = sel ? d.color : (hov ? 'rgba(24,42,66,0.95)' : 'rgba(14,26,44,0.85)');
-      ctx.strokeStyle = sel ? d.color : 'rgba(120,150,190,0.5)';
+      ctx.fillStyle = locked ? 'rgba(16,20,28,0.85)' : (sel ? d.color : (hov ? 'rgba(24,42,66,0.95)' : 'rgba(14,26,44,0.85)'));
+      ctx.strokeStyle = locked ? 'rgba(90,100,120,0.45)' : (sel ? d.color : 'rgba(120,150,190,0.5)');
       ctx.lineWidth = sel ? 2 : 1.2;
       ctx.beginPath(); ctx.roundRect(x, y, bw, 40, 9); ctx.fill(); ctx.stroke();
       ctx.textAlign = 'center';
       ctx.font = 'bold 15px ' + FONT;
-      ctx.fillStyle = sel ? '#04121a' : d.color;
+      ctx.fillStyle = locked ? 'rgba(120,135,160,0.55)' : (sel ? '#04121a' : d.color);
       ctx.fillText(d.name, x + bw / 2, y + 15);
       ctx.font = 'bold 11px ' + FONT;
-      ctx.fillStyle = sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)';
-      ctx.fillText('伤害 ×' + d.dmg.toFixed(1), x + bw / 2, y + 31);
-      G.uiButtons.push({ x, y, w: bw, h: 40, action: () => setDifficulty(key) });
+      ctx.fillStyle = locked ? 'rgba(110,125,150,0.5)' : (sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)');
+      ctx.fillText(locked ? '未解锁' : (d.sudden ? '1 滴血' : '伤害 ×' + d.dmg.toFixed(1)), x + bw / 2, y + 31);
+      G.uiButtons.push({
+        x, y, w: bw, h: 40,
+        action: locked ? () => notifyMenu('通关一次困难模式后解锁「突然死亡」', 4000) : () => setDifficulty(key),
+      });
       x += bw + gap;
     }
   }
@@ -2765,10 +2802,10 @@
     }
     ctx.font = 'bold 13px ' + FONT;
     ctx.fillStyle = 'rgba(142,242,255,0.9)';
-    ctx.fillText('最快通关  ' + fastest.join(' · '), W / 2, y + 3 * 18);
+    ctx.fillText('最快通关  ' + fastest.join(' · '), W / 2, y + DIFF_KEYS.length * 18);
 
     ctx.fillStyle = 'rgba(255,209,102,0.85)';
-    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + 4 * 18);
+    ctx.fillText('总计  ' + SaveData.runs + ' 局 · ' + SaveData.totalKills + ' 杀 · ' + fmtClock(SaveData.totalTime), W / 2, y + (DIFF_KEYS.length + 1) * 18);
   }
 
   function showStats() {
@@ -2885,6 +2922,9 @@
       ctx.fillText(s.bestTime > 0 ? fmtClock(s.bestTime) : '—', cols[4], yy);
       ctx.fillText(s.bestClear > 0 ? fmtRunTime(s.bestClear) : '—', cols[5], yy);
     }
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.65)';
+    ctx.fillText(suddenUnlocked() ? '突然死亡：只有 1 滴血，碰一下就死' : '突然死亡：通关一次困难模式后解锁（只有 1 滴血）', lx, 556);
 
     // 购买记录
     ctx.font = 'bold 16px ' + FONT;
@@ -3254,9 +3294,14 @@
     ctx.font = 'bold 15px ' + FONT;
     ctx.fillStyle = 'rgba(255,209,102,0.9)';
     ctx.fillText('本难度纪录：第 ' + dr.bestWave + ' 波 · 击杀 ' + dr.bestKills, W / 2, H / 2 + 58);
+    if (G.justUnlocked) {
+      ctx.font = 'bold 16px ' + FONT;
+      ctx.fillStyle = '#ff5a5a';
+      ctx.fillText('已解锁：突然死亡模式（只有 1 滴血）', W / 2, H / 2 + 90);
+    }
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#ffd166';
-    ctx.fillText('点击或按 R 再战一局', W / 2, H / 2 + 120);
+    ctx.fillText('点击或按 R 再战一局', W / 2, G.justUnlocked ? H / 2 + 142 : H / 2 + 120);
   }
 
   // ---------------- 主循环 ----------------
