@@ -1215,11 +1215,14 @@
 
     // ----- 生成敌人 -----
     if (!G.bossSpawned) {
-      const rate = 2.10 + G.wave * 0.70;
+      // 怪量随波数加速上涨：第 1 波约 2.9 只/秒，第 14 波约 18 只/秒
+      const w = G.wave;
+      const rate = 2.10 + w * 0.80 + w * w * 0.025;
+      const cap = Math.min(480, 380 + w * 8);
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
-        if (G.enemies.length > 420) break;
+        if (G.enemies.length > cap) break;
         const roll = Math.random();
         let type = 'worm';
         if (G.wave >= 2 && roll < 0.34) type = 'trojan';
