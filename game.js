@@ -179,14 +179,35 @@
   // ---------------- 输入 ----------------
   const keys = Object.create(null);
   const mouse = { x: W / 2, y: H / 2, down: false };
+  // 上上下下左右左右：调试面板
+  const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight'];
+  let konamiIdx = 0;
 
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     initAudio(); // 键盘也算一次交互，顺便放背景音乐
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    if (G.debugPanel) {
+      if (e.code === 'Escape') G.debugPanel = false;
+      return;
+    }
     if (G.state === 'stats') {
       if (e.code === 'Escape' || e.code === 'KeyP') backToMenu();
       return;
+    }
+    // 柯南码：任意模式中 ↑↑↓↓←→←→
+    if (!e.repeat && G.state === 'playing') {
+      if (e.code === KONAMI[konamiIdx]) {
+        konamiIdx++;
+        if (konamiIdx === KONAMI.length) {
+          konamiIdx = 0;
+          if (G.debugMode) G.debugPanel = true;
+          else activateDebugPanel();
+          return;
+        }
+      } else if (e.code.indexOf('Arrow') === 0) {
+        konamiIdx = e.code === KONAMI[0] ? 1 : 0;
+      }
     }
     if (e.code === 'KeyR') game.restart();
     if (e.code === 'KeyM') { AC.muted = !AC.muted; SaveData.muted = AC.muted; persistSave(); }
@@ -550,6 +571,7 @@
 
   // 每波开始（以及商店买完继续）时写一次进度存档
   function saveCheckpoint() {
+    if (G.debugMode) return; // 调试局不写进度
     if (G.state !== 'playing' || !G.player) return;
     SaveData.run = {
       wave: G.wave,
@@ -586,6 +608,7 @@
   }
 
   function recordRun(won) {
+    if (G.debugMode) return; // 调试局不计入统计、也不清进度
     const bucket = SaveData.stats[G.difficulty] || SaveData.stats.easy;
     bumpStats(SaveData);
     bumpStats(bucket);
@@ -709,6 +732,11 @@
     speedMul: 1,            // 1 / 2 / 4 倍速
     difficulty: 'easy',     // easy | normal | hard | sudden
     justUnlocked: false,    // 本局刚通关困难、解锁突然死亡
+    debugMode: false,       // 柯南码开的调试局：整局不计入存档/统计
+    debugPanel: false,      // 面板开着时冻结游戏
+    dbgRateMul: 1,          // 调试：刷怪频率倍率
+    dbgCap: 0,              // 调试：同屏上限（0 表示用默认曲线）
+    entryRun: null,         // 本局开始前的存档快照，调试局结束后还原
     t: 0,
     fps: 60,
 
@@ -778,6 +806,11 @@
     G.paused = false;
     G.speedMul = 1;
     G.justUnlocked = false;
+    G.debugMode = false;
+    G.debugPanel = false;
+    G.dbgRateMul = 1;
+    G.dbgCap = 0;
+    G.entryRun = null;
     G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
     if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
     G.t = 0;
@@ -1096,7 +1129,7 @@
         const wasLocked = !suddenUnlocked();
         G.state = 'win';
         recordRun(true);
-        if (G.difficulty === 'hard' && wasLocked) G.justUnlocked = true;
+        if (!G.debugMode && G.difficulty === 'hard' && wasLocked) G.justUnlocked = true;
       }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
@@ -1115,7 +1148,7 @@
       if (G.state === 'shop') { /* 商店暂停世界 */ }
       return;
     }
-    if (G.paused) return;
+    if (G.paused || G.debugPanel) return;
     G.t += dt;
     G.playTime += dt;
 
@@ -1215,11 +1248,14 @@
 
     // ----- 生成敌人 -----
     if (!G.bossSpawned) {
-      const rate = 2.10 + G.wave * 0.70;
+      // 怪量随波数加速上涨：第 1 波约 2.9 只/秒，第 14 波约 18 只/秒
+      const w = G.wave;
+      const rate = (2.10 + w * 0.80 + w * w * 0.025) * (G.debugMode ? G.dbgRateMul : 1);
+      const cap = G.debugMode && G.dbgCap > 0 ? G.dbgCap : Math.min(480, 380 + w * 8);
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
-        if (G.enemies.length > 420) break;
+        if (G.enemies.length >= cap) break;
         const roll = Math.random();
         let type = 'worm';
         if (G.wave >= 2 && roll < 0.34) type = 'trojan';
@@ -1619,6 +1655,91 @@
     blip(f, 0.06, 'sine', 0.07, f * 1.3);
   }
 
+  // ---------------- 调试面板（上上下下左右左右） ----------------
+  function activateDebugPanel() {
+    if (G.state !== 'playing') return;
+    if (!G.debugMode) {
+      G.debugMode = true;
+      // 本局进度作废：回到本局开始前的存档快照
+      SaveData.run = G.entryRun ? JSON.parse(JSON.stringify(G.entryRun)) : null;
+      persistSave();
+      G.dbgRateMul = 1;
+      G.dbgCap = Math.min(480, 380 + G.wave * 8);
+    }
+    G.paused = false;
+    G.debugPanel = true;
+    G.uiButtons.length = 0;
+  }
+
+  function adjustDebug(kind, delta) {
+    if (!G.debugMode) return;
+    if (kind === 'rate') {
+      G.dbgRateMul = clamp(Math.round((G.dbgRateMul + delta) * 4) / 4, 0.25, 4);
+    } else {
+      G.dbgCap = clamp(Math.round((G.dbgCap + delta) / 50) * 50, 50, 1000);
+    }
+  }
+
+  function resetDebugSpawn() {
+    G.dbgRateMul = 1;
+    G.dbgCap = Math.min(480, 380 + G.wave * 8);
+  }
+
+  function drawDebugPanel() {
+    G.uiButtons.length = 0; // 面板开着时只响应面板按钮
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+
+    const px = W / 2 - 300, py = 170, pw = 600, ph = 380;
+    ctx.save();
+    ctx.shadowBlur = 30;
+    ctx.shadowColor = 'rgba(255,90,90,0.45)';
+    ctx.fillStyle = 'rgba(8,12,22,0.98)';
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 16); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,90,90,0.65)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 16); ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 28px ' + FONT;
+    ctx.fillStyle = '#ff8a8a';
+    ctx.fillText('调试面板', W / 2, py + 46);
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(255,170,170,0.9)';
+    ctx.fillText('本局任何数据都不会计入存档和统计', W / 2, py + 74);
+
+    const rowY = [py + 130, py + 185];
+    const labels = ['刷怪频率', '同屏上限'];
+    const values = ['×' + G.dbgRateMul.toFixed(2), String(G.dbgCap)];
+    for (let i = 0; i < 2; i++) {
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 16px ' + FONT;
+      ctx.fillStyle = 'rgba(210,228,250,0.95)';
+      ctx.fillText(labels[i], px + 40, rowY[i]);
+      ctx.font = 'bold 20px ' + FONT;
+      ctx.fillStyle = '#ffd166';
+      ctx.fillText(values[i], px + 190, rowY[i]);
+      drawSmallButton('-', px + 340, rowY[i] - 20, 44, 34, () => adjustDebug(i === 0 ? 'rate' : 'cap', i === 0 ? -0.25 : -50));
+      drawSmallButton('+', px + 394, rowY[i] - 20, 44, 34, () => adjustDebug(i === 0 ? 'rate' : 'cap', i === 0 ? 0.25 : 50));
+    }
+
+    const baseRate = 2.10 + G.wave * 0.80 + G.wave * G.wave * 0.025;
+    const effRate = baseRate * G.dbgRateMul;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.fillStyle = 'rgba(160,195,235,0.85)';
+    ctx.fillText('第 ' + G.wave + ' 波：约 ' + effRate.toFixed(1) + ' 只/秒 · 同屏上限 ' + G.dbgCap, W / 2, py + 232);
+
+    drawSmallButton('恢复默认', px + 100, py + 270, 140, 40, resetDebugSpawn);
+    drawSmallButton('继续游戏', px + 300, py + 270, 160, 40, () => { G.debugPanel = false; });
+
+    ctx.font = '12px ' + FONT;
+    ctx.fillStyle = 'rgba(150,175,210,0.65)';
+    ctx.fillText('Esc 关闭面板 · 本局仍不计入存档', W / 2, py + 340);
+    ctx.restore();
+  }
+
   // 暂停/统计里返回主界面：保留「每波开始」的进度存档，不额外覆盖
   function backToMenu() {
     if (G.state !== 'playing' && G.state !== 'stats') return;
@@ -1631,7 +1752,9 @@
   function resumeSavedRun() {
     const r = SaveData.run;
     if (!r) { startNewGame(); return; }
+    const entry = JSON.parse(JSON.stringify(r));
     resetGame();
+    G.entryRun = entry; // 本局开始前的存档快照
     G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
     if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
     G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
@@ -1728,6 +1851,7 @@
     drawVignette();
     if (G.state === 'playing') drawHUD();
     if (G.state === 'playing' && G.paused) drawPause();
+    if (G.state === 'playing' && G.debugPanel) drawDebugPanel();
     if (G.state === 'menu') drawMenu();
     if (G.state === 'stats') drawStats();
     if (G.state === 'shop') drawShop();
@@ -2398,6 +2522,11 @@
     ctx.font = 'bold 12px ' + FONT;
     ctx.fillStyle = curDiff.color;
     ctx.fillText(curDiff.name, 34 + waveW + 10, 48);
+    if (G.debugMode) {
+      const diffW = ctx.measureText(curDiff.name).width;
+      ctx.fillStyle = '#ff5a5a';
+      ctx.fillText('调试', 34 + waveW + 10 + diffW + 8, 48);
+    }
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#ffd166';
     ctx.fillText('◈ ' + G.gold, 34, 76);
