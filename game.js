@@ -400,6 +400,26 @@
     boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
+  // 各难度的专属调参；没有配置的难度继续使用基础值
+  const DIFF_TUNING = {
+    easy: {
+      waves: 10,
+      playerHp: 100,
+      coinPickup: 30,
+      enemies: {
+        worm: { hp: 16, dmg: 12, gold: 5 },
+        trojan: { hp: 11, speed: 175, dmg: 6, gold: 4 },
+        leak: { hp: 45, dmg: 20, gold: 7 },
+      },
+      spawnTiers: [
+        { from: 2, trojan: 0.20, leak: 0 },
+        { from: 5, trojan: 0.20, leak: 0.15 },
+        { from: 7, trojan: 0.25, leak: 0.17 },
+        { from: 9, trojan: 0.30, leak: 0.20 },
+      ],
+    },
+  };
+
   // ---------------- 难度 ----------------
   // 只改怪物伤害；简单 = 原来的数值；突然死亡只给 1 点血
   const DIFFS = {
@@ -996,7 +1016,7 @@
     G.goldSpent = 0;
     G.softwareUses = 0;
     G.buys = { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} };
-    const maxHp = G.difficulty === 'sudden' ? 1 : 120;
+    const maxHp = playerMaxHp();
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
       hp: maxHp, maxHp: maxHp,
@@ -1039,8 +1059,47 @@
   }
 
   // ---------------- 实体工厂 ----------------
+  function tuning() {
+    return DIFF_TUNING[G.difficulty] || {};
+  }
+
+  function totalWaves() {
+    return tuning().waves || G.TOTAL_WAVES;
+  }
+
+  function playerMaxHp() {
+    if (G.difficulty === 'sudden') return 1;
+    return tuning().playerHp || 120;
+  }
+
+  function coinPickupRadius() {
+    return tuning().coinPickup || 20;
+  }
+
+  function enemyDef(type) {
+    const base = ENEMY_TYPES[type];
+    const override = (tuning().enemies || {})[type];
+    return override ? Object.assign({}, base, override) : base;
+  }
+
+  function spawnTypeForWave(wave, roll) {
+    const t = tuning();
+    if (t.spawnTiers) {
+      let trojan = 0, leak = 0;
+      for (const tier of t.spawnTiers) {
+        if (wave >= tier.from) { trojan = tier.trojan; leak = tier.leak; }
+      }
+      if (roll < trojan) return 'trojan';
+      if (roll < trojan + leak) return 'leak';
+      return 'worm';
+    }
+    if (wave >= 2 && roll < 0.34) return 'trojan';
+    if (wave >= 4 && roll > 0.88) return 'leak';
+    return 'worm';
+  }
+
   function spawnEnemy(type, x, y, hpMul, dmgMul) {
-    const d = ENEMY_TYPES[type];
+    const d = enemyDef(type);
     G.enemies.push({
       type, x, y,
       hp: d.hp * hpMul, maxHp: d.hp * hpMul,
@@ -1402,7 +1461,7 @@
     if (G.wave === 0) { nextWave(); saveCheckpoint(); }
     if (G.waveTime >= G.WAVE_LEN) {
       G.waveTime = 0;
-      if (G.wave < G.TOTAL_WAVES) {
+      if (G.wave < totalWaves()) {
         nextWave();
         openShop();
       } else if (!G.bossSpawned) {
@@ -1436,11 +1495,7 @@
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
         if (G.enemies.length >= cap) break;
-        const roll = Math.random();
-        let type = 'worm';
-        if (G.wave >= 2 && roll < 0.34) type = 'trojan';
-        if (G.wave >= 4 && roll > 0.88) type = 'leak';
-        spawnEnemyAround(type);
+        spawnEnemyAround(spawnTypeForWave(G.wave, Math.random()));
       }
     }
 
@@ -1639,7 +1694,8 @@
         c.x += Math.cos(a) * pull * dt;
         c.y += Math.sin(a) * pull * dt;
       }
-      if (d < 20) {
+      const collectR = c.heal ? 20 : coinPickupRadius();
+      if (d < collectR) {
         if (c.heal) {
           p.hp = Math.min(p.maxHp, p.hp + c.heal);
           blip(760, 0.09, 'sine', 0.09, 1250);
@@ -1937,7 +1993,7 @@
     G.entryRun = entry; // 本局开始前的存档快照
     G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
     if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
-    G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
+    G.wave = clamp(Math.round(r.wave) || 1, 1, totalWaves());
     G.waveTime = 0;
     G.gold = Math.max(0, Math.round(r.gold) || 0);
     G.cpuIdx = clamp(Math.round(r.cpuIdx) || 0, 0, CPUS.length - 1);
@@ -1945,8 +2001,8 @@
     G.ramIdx = clamp(Math.round(r.ramIdx) || 0, 0, RAMS.length - 1);
     G.ssdIdx = clamp(Math.round(r.ssdIdx) || 0, 0, SSDS.length - 1);
     G.player.maxMana = ram().maxMana;
+    G.player.maxHp = playerMaxHp();
     if (G.difficulty === 'sudden') {
-      G.player.maxHp = 1;
       G.player.hp = 1;
     } else {
       G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
@@ -2695,7 +2751,7 @@
     ctx.textAlign = 'left';
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#8ef2ff';
-    const waveTxt = 'WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES;
+    const waveTxt = 'WAVE ' + G.wave + ' / ' + totalWaves();
     ctx.fillText(waveTxt, 34, 46);
     const curDiff = diffOf(G.difficulty);
     const waveW = ctx.measureText(waveTxt).width;
