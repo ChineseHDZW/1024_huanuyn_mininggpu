@@ -828,14 +828,12 @@
   };
 
   // ---------------- 成就 ----------------
-  // 稀有度从低到高：普通、稀有、超稀有、史诗、神话、传奇
+  // 稀有度从低到高：稀有、史诗、神话、传奇
   const RARITIES = {
-    common:    { name: '普通',   color: '#E8F2FF', rank: 0 },
-    rare:      { name: '稀有',   color: '#7DFF9B', rank: 1 },
-    superrare: { name: '超稀有', color: '#5AD1FF', rank: 2 },
-    epic:      { name: '史诗',   color: '#B388FF', rank: 3 },
-    mythic:    { name: '神话',   color: '#FF5A5A', rank: 4 },
-    legendary: { name: '传奇',   color: '#FFD166', rank: 5 },
+    rare:      { name: '稀有', color: '#7DFF9B', rank: 0 },
+    epic:      { name: '史诗', color: '#B388FF', rank: 1 },
+    mythic:    { name: '神话', color: '#FF5A5A', rank: 2 },
+    legendary: { name: '传奇', color: '#FFD166', rank: 3 },
   };
 
   function buyTotal(kind) {
@@ -847,49 +845,54 @@
 
   const ACHIEVEMENTS = [
     {
-      id: 'easy_clear', name: '初入装机世界', rarity: 'common', badge: '01',
+      id: 'easy_clear', name: '初入装机世界', rarity: 'rare', badge: '01',
       condition: '通关一次简单模式', desc: '玩家的一小步，装机的一大步。',
       test: (c) => (c.won && c.difficulty === 'easy') || c.stats.easy.bestClear > 0,
     },
     {
-      id: 'first_cpu', name: '第一块CPU', rarity: 'common', badge: 'CPU',
+      id: 'first_cpu', name: '第一块CPU', rarity: 'rare', badge: 'CPU',
       condition: '第一次购买一块任意的CPU', desc: '小方块，大魔力。',
       test: (c) => c.buys.cpu > 0,
     },
     {
-      id: 'first_gpu', name: '第一张显卡', rarity: 'common', badge: 'GPU',
+      id: 'first_gpu', name: '第一张显卡', rarity: 'rare', badge: 'GPU',
       condition: '第一次购买任意一张显卡', desc: '这是什么，鲜咔！',
       test: (c) => c.buys.gpu > 0,
     },
     {
-      id: 'first_ram', name: '第一根内存条', rarity: 'common', badge: 'RAM',
+      id: 'first_ram', name: '第一根内存条', rarity: 'rare', badge: 'RAM',
       condition: '第一次购买任意一根内存条', desc: '或许它比金条还要贵呢。',
       test: (c) => c.buys.ram > 0,
     },
     {
-      id: 'first_ssd', name: '第一块SSD', rarity: 'common', badge: 'SSD',
+      id: 'first_ssd', name: '第一块SSD', rarity: 'rare', badge: 'SSD',
       condition: '第一次购买任意一块SSD', desc: '小盒子，装下大世界。',
       test: (c) => c.buys.ssd > 0,
     },
     {
-      id: 'first_software', name: '第一款软件', rarity: 'common', badge: 'APP',
+      id: 'first_software', name: '第一款软件', rarity: 'rare', badge: 'APP',
       condition: '第一次购买任意一款软件', desc: '硬件与软件的结合才是完美装机！',
       test: (c) => c.buys.software > 0,
     },
     {
-      id: 'normal_clear', name: '探索装机世界', rarity: 'rare', badge: '02',
+      id: 'normal_clear', name: '探索装机世界', rarity: 'epic', badge: '02',
       condition: '第一次通关普通模式', desc: '硬件与软件的碰撞，成就狂野的大肥鱼！',
       test: (c) => (c.won && c.difficulty === 'normal') || c.stats.normal.bestClear > 0,
     },
     {
-      id: 'hard_clear', name: '深入装机世界', rarity: 'epic', badge: '03',
+      id: 'hard_clear', name: '深入装机世界', rarity: 'mythic', badge: '03',
       condition: '第一次通关困难模式', desc: '我来这里就办三件事，装机，装机，还是装机！',
       test: (c) => (c.won && c.difficulty === 'hard') || c.stats.hard.bestClear > 0,
+    },
+    {
+      id: 'sudden_clear', name: '搞机大佬', rarity: 'legendary', badge: '04',
+      condition: '通关突然死亡模式', desc: '您才是真正的装机大神！',
+      test: (c) => (c.won && c.difficulty === 'sudden') || c.stats.sudden.bestClear > 0,
     },
   ];
 
   // 按稀有度从低到高展示；同稀有度保持配置顺序
-  ACHIEVEMENTS.sort((a, b) => (RARITIES[a.rarity] || RARITIES.common).rank - (RARITIES[b.rarity] || RARITIES.common).rank);
+  ACHIEVEMENTS.sort((a, b) => (RARITIES[a.rarity] || RARITIES.rare).rank - (RARITIES[b.rarity] || RARITIES.rare).rank);
 
   const ACHIEVEMENT_MAP = {};
   for (const a of ACHIEVEMENTS) ACHIEVEMENT_MAP[a.id] = a;
@@ -3561,7 +3564,7 @@
   }
 
   function drawAchievementBadge(a, cx, cy, size, unlocked) {
-    const r = RARITIES[a.rarity] || RARITIES.common;
+    const r = RARITIES[a.rarity] || RARITIES.rare;
     const rad = size / 2;
     ctx.save();
     ctx.translate(cx, cy);
@@ -3589,7 +3592,7 @@
   }
 
   function drawRarityPill(a, x, y, fontPx) {
-    const r = RARITIES[a.rarity] || RARITIES.common;
+    const r = RARITIES[a.rarity] || RARITIES.rare;
     const fs = fontPx || 10;
     ctx.save();
     ctx.font = 'bold ' + fs + 'px ' + FONT;
@@ -3615,7 +3618,7 @@
 
   function drawAchievementCard(a, x, y, w, h) {
     const unlocked = achievementUnlocked(a);
-    const r = RARITIES[a.rarity] || RARITIES.common;
+    const r = RARITIES[a.rarity] || RARITIES.rare;
     ctx.save();
     ctx.fillStyle = unlocked ? 'rgba(10,18,32,0.95)' : 'rgba(8,12,22,0.72)';
     ctx.strokeStyle = unlocked ? alphaColor(r.color, 0.6) : 'rgba(80,100,130,0.28)';
@@ -3725,7 +3728,7 @@
   }
 
   function drawResultAchievementCard(a, x, y, w, h) {
-    const r = RARITIES[a.rarity] || RARITIES.common;
+    const r = RARITIES[a.rarity] || RARITIES.rare;
     ctx.save();
     ctx.fillStyle = 'rgba(8,14,26,0.94)';
     ctx.strokeStyle = alphaColor(r.color, 0.55);
@@ -3840,7 +3843,7 @@
     const newList = (G.newAchievements || [])
       .map(achievementById)
       .filter(Boolean)
-      .sort((a, b) => (RARITIES[b.rarity] || RARITIES.common).rank - (RARITIES[a.rarity] || RARITIES.common).rank);
+      .sort((a, b) => (RARITIES[b.rarity] || RARITIES.rare).rank - (RARITIES[a.rarity] || RARITIES.rare).rank);
     if (G.debugMode) {
       ctx.textAlign = 'center';
       ctx.font = 'bold 16px ' + FONT;
