@@ -406,6 +406,7 @@
       waves: 10,
       playerHp: 100,
       coinPickup: 30,
+      hpGrowth: 0.20,
       enemies: {
         worm: { hp: 16, dmg: 12, gold: 5 },
         trojan: { hp: 11, speed: 175, dmg: 6, gold: 4 },
@@ -421,16 +422,15 @@
   };
 
   // ---------------- 难度 ----------------
-  // 只改怪物伤害；简单 = 原来的数值；突然死亡只给 1 点血
+  // 难度不再提供伤害倍率；突然死亡只给 1 点血
   const DIFFS = {
-    easy:   { name: '简单', dmg: 1.0, color: '#7dffd4' },
-    normal: { name: '普通', dmg: 1.5, color: '#8ef2ff' },
-    hard:   { name: '困难', dmg: 2.0, color: '#ff8ad8' },
-    sudden: { name: '突然死亡', dmg: 1.0, color: '#ff5a5a', sudden: true },
+    easy:   { name: '简单', color: '#7dffd4' },
+    normal: { name: '普通', color: '#8ef2ff' },
+    hard:   { name: '困难', color: '#ff8ad8' },
+    sudden: { name: '突然死亡', color: '#ff5a5a', sudden: true },
   };
   const DIFF_KEYS = ['easy', 'normal', 'hard', 'sudden'];
   function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
-  function diffDamageMul() { return diffOf(G.difficulty).dmg; }
   // 通关过困难才解锁
   function suddenUnlocked() {
     const h = SaveData.stats ? SaveData.stats.hard : null;
@@ -1104,7 +1104,7 @@
       type, x, y,
       hp: d.hp * hpMul, maxHp: d.hp * hpMul,
       speed: d.speed * rnd(1.16, 0.86),
-      dmg: d.dmg * dmgMul * diffDamageMul(),
+      dmg: d.dmg * dmgMul,
       r: d.r,
       color: d.color,
       gold: d.gold,
@@ -1119,6 +1119,8 @@
   function spawnEnemyAround(type) {
     const p = G.player;
     const bx = ARENA.w / 2 - 40, by = ARENA.h / 2 - 40;
+    const hpMul = 1 + G.wave * (tuning().hpGrowth || 0.26);
+    const dmgMul = 1 + G.wave * 0.10;
     for (let tries = 0; tries < 10; tries++) {
       const a = rnd(TAU, 0);
       const r = 480 + rnd(320, 0);
@@ -1127,10 +1129,10 @@
       x = clamp(x, -bx, bx);
       y = clamp(y, -by, by);
       if (dist(x, y, p.x, p.y) < 280) continue;
-      spawnEnemy(type, x, y, 1 + G.wave * 0.26, 1 + G.wave * 0.10);
+      spawnEnemy(type, x, y, hpMul, dmgMul);
       return;
     }
-    spawnEnemy(type, clamp(p.x + 520, -bx, bx), clamp(p.y, -by, by), 1 + G.wave * 0.26, 1 + G.wave * 0.10);
+    spawnEnemy(type, clamp(p.x + 520, -bx, bx), clamp(p.y, -by, by), hpMul, dmgMul);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -1581,7 +1583,7 @@
             const a = (k / 14) * TAU + e.phase;
             G.ebullets.push({
               x: e.x, y: e.y, vx: Math.cos(a) * 250, vy: Math.sin(a) * 250,
-              r: 9, dmg: 9 * diffDamageMul(), life: 5, color: '#ff3b3b',
+              r: 9, dmg: 9, life: 5, color: '#ff3b3b',
             });
           }
           e.phase += 0.4;
@@ -3084,7 +3086,7 @@
     const btnY = H / 2 + 196;
     if (hasRun) {
       const rd = diffOf(SaveData.run.difficulty);
-      const rdTag = rd.sudden ? '1 滴血' : '伤害 ×' + rd.dmg.toFixed(1);
+      const rdTag = rd.sudden ? '1 滴血' : '无伤害倍率';
       ctx.font = 'bold 12px ' + FONT;
       ctx.fillStyle = 'rgba(170,195,230,0.75)';
       ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（' + rdTag + '）', W / 2, btnY - 18);
@@ -3137,7 +3139,7 @@
       ctx.fillText(d.name, x + bw / 2, y + 15);
       ctx.font = 'bold 11px ' + FONT;
       ctx.fillStyle = locked ? 'rgba(110,125,150,0.5)' : (sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)');
-      ctx.fillText(locked ? '未解锁' : (d.sudden ? '1 滴血' : '伤害 ×' + d.dmg.toFixed(1)), x + bw / 2, y + 31);
+      ctx.fillText(locked ? '未解锁' : (d.sudden ? '1 滴血' : '无伤害倍率'), x + bw / 2, y + 31);
       G.uiButtons.push({
         x, y, w: bw, h: 40,
         action: locked ? () => notifyMenu('通关一次困难模式后解锁「突然死亡」', 4000) : () => setDifficulty(key),
