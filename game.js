@@ -875,12 +875,12 @@
       test: (c) => c.buys.software > 0,
     },
     {
-      id: 'normal_clear', name: '探索装机世界', rarity: 'rare', badge: '02',
+      id: 'normal_clear', name: '探索装机世界', rarity: 'epic', badge: '02',
       condition: '第一次通关普通模式', desc: '硬件与软件的碰撞，成就狂野的大肥鱼！',
       test: (c) => (c.won && c.difficulty === 'normal') || c.stats.normal.bestClear > 0,
     },
     {
-      id: 'hard_clear', name: '深入装机世界', rarity: 'epic', badge: '03',
+      id: 'hard_clear', name: '深入装机世界', rarity: 'mythic', badge: '03',
       condition: '第一次通关困难模式', desc: '我来这里就办三件事，装机，装机，还是装机！',
       test: (c) => (c.won && c.difficulty === 'hard') || c.stats.hard.bestClear > 0,
     },
