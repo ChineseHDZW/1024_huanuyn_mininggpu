@@ -400,17 +400,37 @@
     boss:   { hp: 9000, speed: 108, dmg: 26, r: 58, color: '#ff3b3b', gold: 300, score: 50 },
   };
 
+  // 各难度的专属调参；没有配置的难度继续使用基础值
+  const DIFF_TUNING = {
+    easy: {
+      waves: 10,
+      playerHp: 100,
+      coinPickup: 30,
+      hpGrowth: 0.20,
+      enemies: {
+        worm: { hp: 16, dmg: 12, gold: 5 },
+        trojan: { hp: 11, speed: 175, dmg: 6, gold: 4 },
+        leak: { hp: 40, dmg: 20, gold: 7 },
+      },
+      spawnTiers: [
+        { from: 2, trojan: 0.20, leak: 0 },
+        { from: 5, trojan: 0.20, leak: 0.12 },
+        { from: 7, trojan: 0.20, leak: 0.15 },
+        { from: 9, trojan: 0.25, leak: 0.15 },
+      ],
+    },
+  };
+
   // ---------------- 难度 ----------------
-  // 只改怪物伤害；简单 = 原来的数值；突然死亡只给 1 点血
+  // 难度不再提供伤害倍率；突然死亡只给 1 点血
   const DIFFS = {
-    easy:   { name: '简单', dmg: 1.0, color: '#7dffd4' },
-    normal: { name: '普通', dmg: 1.5, color: '#8ef2ff' },
-    hard:   { name: '困难', dmg: 2.0, color: '#ff8ad8' },
-    sudden: { name: '突然死亡', dmg: 1.0, color: '#ff5a5a', sudden: true },
+    easy:   { name: '简单', color: '#7dffd4' },
+    normal: { name: '普通', color: '#8ef2ff' },
+    hard:   { name: '困难', color: '#ff8ad8' },
+    sudden: { name: '突然死亡', color: '#ff5a5a', sudden: true },
   };
   const DIFF_KEYS = ['easy', 'normal', 'hard', 'sudden'];
   function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
-  function diffDamageMul() { return diffOf(G.difficulty).dmg; }
   // 难度按通关进度解锁；旧存档有游玩记录时保留原有访问权限
   function difficultyUnlocked(key) {
     if (key === 'easy') return true;
@@ -1030,7 +1050,7 @@
     G.goldSpent = 0;
     G.softwareUses = 0;
     G.buys = { cpu: {}, gpu: {}, ram: {}, ssd: {}, software: {} };
-    const maxHp = G.difficulty === 'sudden' ? 1 : 120;
+    const maxHp = playerMaxHp();
     G.player = {
       x: 0, y: 0, vx: 0, vy: 0,
       hp: maxHp, maxHp: maxHp,
@@ -1073,13 +1093,52 @@
   }
 
   // ---------------- 实体工厂 ----------------
+  function tuning() {
+    return DIFF_TUNING[G.difficulty] || {};
+  }
+
+  function totalWaves() {
+    return tuning().waves || G.TOTAL_WAVES;
+  }
+
+  function playerMaxHp() {
+    if (G.difficulty === 'sudden') return 1;
+    return tuning().playerHp || 120;
+  }
+
+  function coinPickupRadius() {
+    return tuning().coinPickup || 20;
+  }
+
+  function enemyDef(type) {
+    const base = ENEMY_TYPES[type];
+    const override = (tuning().enemies || {})[type];
+    return override ? Object.assign({}, base, override) : base;
+  }
+
+  function spawnTypeForWave(wave, roll) {
+    const t = tuning();
+    if (t.spawnTiers) {
+      let trojan = 0, leak = 0;
+      for (const tier of t.spawnTiers) {
+        if (wave >= tier.from) { trojan = tier.trojan; leak = tier.leak; }
+      }
+      if (roll < trojan) return 'trojan';
+      if (roll < trojan + leak) return 'leak';
+      return 'worm';
+    }
+    if (wave >= 2 && roll < 0.34) return 'trojan';
+    if (wave >= 4 && roll > 0.88) return 'leak';
+    return 'worm';
+  }
+
   function spawnEnemy(type, x, y, hpMul, dmgMul) {
-    const d = ENEMY_TYPES[type];
+    const d = enemyDef(type);
     G.enemies.push({
       type, x, y,
       hp: d.hp * hpMul, maxHp: d.hp * hpMul,
       speed: d.speed * rnd(1.16, 0.86),
-      dmg: d.dmg * dmgMul * diffDamageMul(),
+      dmg: d.dmg * dmgMul,
       r: d.r,
       color: d.color,
       gold: d.gold,
@@ -1094,6 +1153,8 @@
   function spawnEnemyAround(type) {
     const p = G.player;
     const bx = ARENA.w / 2 - 40, by = ARENA.h / 2 - 40;
+    const hpMul = 1 + G.wave * (tuning().hpGrowth || 0.26);
+    const dmgMul = 1 + G.wave * 0.10;
     for (let tries = 0; tries < 10; tries++) {
       const a = rnd(TAU, 0);
       const r = 480 + rnd(320, 0);
@@ -1102,10 +1163,10 @@
       x = clamp(x, -bx, bx);
       y = clamp(y, -by, by);
       if (dist(x, y, p.x, p.y) < 280) continue;
-      spawnEnemy(type, x, y, 1 + G.wave * 0.26, 1 + G.wave * 0.10);
+      spawnEnemy(type, x, y, hpMul, dmgMul);
       return;
     }
-    spawnEnemy(type, clamp(p.x + 520, -bx, bx), clamp(p.y, -by, by), 1 + G.wave * 0.26, 1 + G.wave * 0.10);
+    spawnEnemy(type, clamp(p.x + 520, -bx, bx), clamp(p.y, -by, by), hpMul, dmgMul);
   }
 
   function addParticles(x, y, color, n, speed, life) {
@@ -1442,7 +1503,7 @@
     if (G.wave === 0) { nextWave(); saveCheckpoint(); }
     if (G.waveTime >= G.WAVE_LEN) {
       G.waveTime = 0;
-      if (G.wave < G.TOTAL_WAVES) {
+      if (G.wave < totalWaves()) {
         nextWave();
         openShop();
       } else if (!G.bossSpawned) {
@@ -1476,11 +1537,7 @@
       while (G.spawnAcc >= 1) {
         G.spawnAcc -= 1;
         if (G.enemies.length >= cap) break;
-        const roll = Math.random();
-        let type = 'worm';
-        if (G.wave >= 2 && roll < 0.34) type = 'trojan';
-        if (G.wave >= 4 && roll > 0.88) type = 'leak';
-        spawnEnemyAround(type);
+        spawnEnemyAround(spawnTypeForWave(G.wave, Math.random()));
       }
     }
 
@@ -1498,7 +1555,7 @@
       const d = Math.hypot(dx, dy) || 1;
       const minD = e.r + 36;
       if (d < minD) {
-        hitPlayer(e.dmg * 0.26);
+        hitPlayer(e.dmg * 0.5);
         const k = (minD - d) * Math.min(1, dt * 10);
         e.x += (dx / d) * k;
         e.y += (dy / d) * k;
@@ -1566,7 +1623,7 @@
             const a = (k / 14) * TAU + e.phase;
             G.ebullets.push({
               x: e.x, y: e.y, vx: Math.cos(a) * 250, vy: Math.sin(a) * 250,
-              r: 9, dmg: 9 * diffDamageMul(), life: 5, color: '#ff3b3b',
+              r: 9, dmg: 9, life: 5, color: '#ff3b3b',
             });
           }
           e.phase += 0.4;
@@ -1679,7 +1736,8 @@
         c.x += Math.cos(a) * pull * dt;
         c.y += Math.sin(a) * pull * dt;
       }
-      if (d < 20) {
+      const collectR = c.heal ? 20 : coinPickupRadius();
+      if (d < collectR) {
         if (c.heal) {
           p.hp = Math.min(p.maxHp, p.hp + c.heal);
           blip(760, 0.09, 'sine', 0.09, 1250);
@@ -1978,7 +2036,7 @@
     G.entryRun = entry; // 本局开始前的存档快照
     G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
     if (!difficultyUnlocked(G.difficulty)) G.difficulty = 'easy';
-    G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
+    G.wave = clamp(Math.round(r.wave) || 1, 1, totalWaves());
     G.waveTime = 0;
     G.gold = Math.max(0, Math.round(r.gold) || 0);
     G.cpuIdx = clamp(Math.round(r.cpuIdx) || 0, 0, CPUS.length - 1);
@@ -1986,8 +2044,8 @@
     G.ramIdx = clamp(Math.round(r.ramIdx) || 0, 0, RAMS.length - 1);
     G.ssdIdx = clamp(Math.round(r.ssdIdx) || 0, 0, SSDS.length - 1);
     G.player.maxMana = ram().maxMana;
+    G.player.maxHp = playerMaxHp();
     if (G.difficulty === 'sudden') {
-      G.player.maxHp = 1;
       G.player.hp = 1;
     } else {
       G.player.hp = clamp(Math.round(r.hp) || G.player.maxHp, 1, G.player.maxHp);
@@ -2736,7 +2794,7 @@
     ctx.textAlign = 'left';
     ctx.font = 'bold 22px ' + FONT;
     ctx.fillStyle = '#8ef2ff';
-    const waveTxt = 'WAVE ' + G.wave + ' / ' + G.TOTAL_WAVES;
+    const waveTxt = 'WAVE ' + G.wave + ' / ' + totalWaves();
     ctx.fillText(waveTxt, 34, 46);
     const curDiff = diffOf(G.difficulty);
     const waveW = ctx.measureText(waveTxt).width;
@@ -3069,7 +3127,7 @@
     const btnY = H / 2 + 196;
     if (hasRun) {
       const rd = diffOf(SaveData.run.difficulty);
-      const rdTag = rd.sudden ? '1 滴血' : '伤害 ×' + rd.dmg.toFixed(1);
+      const rdTag = rd.sudden ? '1 滴血' : '无伤害倍率';
       ctx.font = 'bold 12px ' + FONT;
       ctx.fillStyle = 'rgba(170,195,230,0.75)';
       ctx.fillText('存档：第 ' + SaveData.run.wave + ' 波 · ' + rd.name + '（' + rdTag + '）', W / 2, btnY - 18);
@@ -3122,7 +3180,7 @@
       ctx.fillText(d.name, x + bw / 2, y + 15);
       ctx.font = 'bold 11px ' + FONT;
       ctx.fillStyle = locked ? 'rgba(110,125,150,0.5)' : (sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)');
-      ctx.fillText(locked ? difficultyUnlockShort(key) : (d.sudden ? '1 滴血' : '伤害 ×' + d.dmg.toFixed(1)), x + bw / 2, y + 31);
+      ctx.fillText(locked ? difficultyUnlockShort(key) : (d.sudden ? '1 滴血' : '无伤害倍率'), x + bw / 2, y + 31);
       G.uiButtons.push({
         x, y, w: bw, h: 40,
         action: locked ? () => notifyMenu(difficultyUnlockHint(key), 4000) : () => setDifficulty(key),
