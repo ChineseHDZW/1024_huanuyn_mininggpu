@@ -18,6 +18,7 @@
 
   // ---------------- 场地 ----------------
   const ARENA = { w: 2600, h: 1800 };
+  const SPAWN_RATE_MUL = 0.75;
 
   // ---------------- 画布与缩放 ----------------
   const W = 1280, H = 720;
@@ -1531,7 +1532,7 @@
     if (!G.bossSpawned) {
       // 怪量随波数加速上涨：第 1 波约 2.9 只/秒，第 14 波约 18 只/秒
       const w = G.wave;
-      const rate = (2.10 + w * 0.80 + w * w * 0.025) * (G.debugMode ? G.dbgRateMul : 1);
+      const rate = (2.10 + w * 0.80 + w * w * 0.025) * SPAWN_RATE_MUL * (G.debugMode ? G.dbgRateMul : 1);
       const cap = G.debugMode && G.dbgCap > 0 ? G.dbgCap : Math.min(480, 380 + w * 8);
       G.spawnAcc += rate * dt;
       while (G.spawnAcc >= 1) {
@@ -2003,7 +2004,7 @@
       drawSmallButton('+', px + 394, rowY[i] - 20, 44, 34, () => adjustDebug(i === 0 ? 'rate' : 'cap', i === 0 ? 0.25 : 50));
     }
 
-    const baseRate = 2.10 + G.wave * 0.80 + G.wave * G.wave * 0.025;
+    const baseRate = (2.10 + G.wave * 0.80 + G.wave * G.wave * 0.025) * SPAWN_RATE_MUL;
     const effRate = baseRate * G.dbgRateMul;
     ctx.textAlign = 'center';
     ctx.font = 'bold 13px ' + FONT;
