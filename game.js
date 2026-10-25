@@ -1515,7 +1515,7 @@
       const d = Math.hypot(dx, dy) || 1;
       const minD = e.r + 36;
       if (d < minD) {
-        hitPlayer(e.dmg * 0.26);
+        hitPlayer(e.dmg * 0.5);
         const k = (minD - d) * Math.min(1, dt * 10);
         e.x += (dx / d) * k;
         e.y += (dy / d) * k;
