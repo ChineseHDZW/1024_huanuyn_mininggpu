@@ -884,6 +884,11 @@
       condition: '第一次通关困难模式', desc: '我来这里就办三件事，装机，装机，还是装机！',
       test: (c) => (c.won && c.difficulty === 'hard') || c.stats.hard.bestClear > 0,
     },
+    {
+      id: 'sudden_clear', name: '搞机大佬', rarity: 'legendary', badge: '04',
+      condition: '通关突然死亡模式', desc: '您才是真正的装机大神！',
+      test: (c) => (c.won && c.difficulty === 'sudden') || c.stats.sudden.bestClear > 0,
+    },
   ];
 
   // 按稀有度从低到高展示；同稀有度保持配置顺序
