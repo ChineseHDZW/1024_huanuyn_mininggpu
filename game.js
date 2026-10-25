@@ -414,9 +414,9 @@
       },
       spawnTiers: [
         { from: 2, trojan: 0.20, leak: 0 },
-        { from: 5, trojan: 0.20, leak: 0.15 },
-        { from: 7, trojan: 0.25, leak: 0.17 },
-        { from: 9, trojan: 0.30, leak: 0.20 },
+        { from: 5, trojan: 0.20, leak: 0.12 },
+        { from: 7, trojan: 0.20, leak: 0.15 },
+        { from: 9, trojan: 0.25, leak: 0.15 },
       ],
     },
   };
