@@ -411,10 +411,41 @@
   const DIFF_KEYS = ['easy', 'normal', 'hard', 'sudden'];
   function diffOf(key) { return DIFFS[key] || DIFFS.easy; }
   function diffDamageMul() { return diffOf(G.difficulty).dmg; }
-  // 通关过困难才解锁
+  // 难度按通关进度解锁；旧存档有游玩记录时保留原有访问权限
+  function difficultyUnlocked(key) {
+    if (key === 'easy') return true;
+    const stats = SaveData.stats || {};
+    if (key === 'normal') {
+      return !!((stats.easy && stats.easy.bestClear > 0) ||
+        (stats.normal && (stats.normal.runs > 0 || stats.normal.bestWave > 0)));
+    }
+    if (key === 'hard') {
+      return !!((stats.normal && stats.normal.bestClear > 0) ||
+        (stats.hard && (stats.hard.runs > 0 || stats.hard.bestWave > 0)));
+    }
+    if (key === 'sudden') {
+      return !!((stats.hard && stats.hard.bestClear > 0) ||
+        (stats.sudden && (stats.sudden.runs > 0 || stats.sudden.bestWave > 0)));
+    }
+    return false;
+  }
+
+  function difficultyUnlockHint(key) {
+    if (key === 'normal') return '通关一次简单模式后解锁「普通」';
+    if (key === 'hard') return '通关一次普通模式后解锁「困难」';
+    if (key === 'sudden') return '通关一次困难模式后解锁「突然死亡」';
+    return '';
+  }
+
+  function difficultyUnlockShort(key) {
+    if (key === 'normal') return '通关简单';
+    if (key === 'hard') return '通关普通';
+    if (key === 'sudden') return '通关困难';
+    return '未解锁';
+  }
+
   function suddenUnlocked() {
-    const h = SaveData.stats ? SaveData.stats.hard : null;
-    return !!(h && h.bestClear > 0);
+    return difficultyUnlocked('sudden');
   }
 
   // ---------------- 本地存档（localStorage + 哈希校验） ----------------
@@ -557,8 +588,8 @@
         if (typeof at === 'number' && isFinite(at) && at > 0) SaveData.achievements[a.id] = at;
       }
     }
-    // 突然死亡没解锁时不能直接用（比如导入了别人的存档）
-    if (SaveData.difficulty === 'sudden' && !suddenUnlocked()) SaveData.difficulty = 'easy';
+    // 当前难度没解锁时不能直接用（比如导入了别人的存档）
+    if (!difficultyUnlocked(SaveData.difficulty)) SaveData.difficulty = 'easy';
     if (data.run && typeof data.run === 'object' && data.run.wave) SaveData.run = data.run;
   }
 
@@ -753,7 +784,7 @@
     paused: false,
     speedMul: 1,            // 1 / 2 / 4 倍速
     difficulty: 'easy',     // easy | normal | hard | sudden
-    justUnlocked: false,    // 本局刚通关困难、解锁突然死亡
+    unlockText: '',         // 本局通关后新解锁的难度提示
     debugMode: false,       // 柯南码开的调试局：整局不计入存档/统计
     debugPanel: false,      // 面板开着时冻结游戏
     dbgRateMul: 1,          // 调试：刷怪频率倍率
@@ -985,14 +1016,14 @@
     G.state = 'playing';
     G.paused = false;
     G.speedMul = 1;
-    G.justUnlocked = false;
+    G.unlockText = '';
     G.debugMode = false;
     G.debugPanel = false;
     G.dbgRateMul = 1;
     G.dbgCap = 0;
     G.entryRun = null;
     G.difficulty = DIFFS[SaveData.difficulty] ? SaveData.difficulty : 'easy';
-    if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
+    if (!difficultyUnlocked(G.difficulty)) G.difficulty = 'easy';
     G.t = 0;
     G.killCounts = { worm: 0, trojan: 0, leak: 0, boss: 0 };
     G.goldEarned = 0;
@@ -1309,10 +1340,16 @@
       }
       setTimeout(() => {
         if (G.state !== 'playing') return;
-        const wasLocked = !suddenUnlocked();
+        const wasNormal = difficultyUnlocked('normal');
+        const wasHard = difficultyUnlocked('hard');
+        const wasSudden = difficultyUnlocked('sudden');
         G.state = 'win';
         recordRun(true);
-        if (!G.debugMode && G.difficulty === 'hard' && wasLocked) G.justUnlocked = true;
+        if (!G.debugMode) {
+          if (!wasNormal && difficultyUnlocked('normal')) G.unlockText = '已解锁：普通模式';
+          else if (!wasHard && difficultyUnlocked('hard')) G.unlockText = '已解锁：困难模式';
+          else if (!wasSudden && difficultyUnlocked('sudden')) G.unlockText = '已解锁：突然死亡模式（只有 1 滴血）';
+        }
       }, 900);
     } else {
       G.pickups.push({ x: e.x, y: e.y, vx: 0, vy: 0, v: e.gold, r: 5, life: 10 });
@@ -1827,11 +1864,12 @@
   }
 
   function setDifficulty(key) {
-    if (G.state !== 'menu' || !DIFFS[key] || SaveData.difficulty === key) return;
-    if (key === 'sudden' && !suddenUnlocked()) {
-      notifyMenu('通关一次困难模式后解锁「突然死亡」', 4000);
+    if (G.state !== 'menu' || !DIFFS[key]) return;
+    if (!difficultyUnlocked(key)) {
+      notifyMenu(difficultyUnlockHint(key), 4000);
       return;
     }
+    if (SaveData.difficulty === key) return;
     SaveData.difficulty = key;
     persistSave();
     const f = key === 'sudden' ? 300 : key === 'hard' ? 880 : key === 'normal' ? 660 : 520;
@@ -1939,7 +1977,7 @@
     resetGame();
     G.entryRun = entry; // 本局开始前的存档快照
     G.difficulty = DIFFS[r.difficulty] ? r.difficulty : SaveData.difficulty;
-    if (G.difficulty === 'sudden' && !suddenUnlocked()) G.difficulty = 'easy';
+    if (!difficultyUnlocked(G.difficulty)) G.difficulty = 'easy';
     G.wave = clamp(Math.round(r.wave) || 1, 1, G.TOTAL_WAVES);
     G.waveTime = 0;
     G.gold = Math.max(0, Math.round(r.gold) || 0);
@@ -3071,7 +3109,7 @@
     let x = W / 2 - total / 2;
     for (const key of DIFF_KEYS) {
       const d = DIFFS[key];
-      const locked = key === 'sudden' && !suddenUnlocked();
+      const locked = !difficultyUnlocked(key);
       const sel = SaveData.difficulty === key && !locked;
       const hov = mouse.x > x && mouse.x < x + bw && mouse.y > y && mouse.y < y + 40;
       ctx.fillStyle = locked ? 'rgba(16,20,28,0.85)' : (sel ? d.color : (hov ? 'rgba(24,42,66,0.95)' : 'rgba(14,26,44,0.85)'));
@@ -3084,10 +3122,10 @@
       ctx.fillText(d.name, x + bw / 2, y + 15);
       ctx.font = 'bold 11px ' + FONT;
       ctx.fillStyle = locked ? 'rgba(110,125,150,0.5)' : (sel ? 'rgba(4,18,26,0.75)' : 'rgba(180,205,235,0.65)');
-      ctx.fillText(locked ? '未解锁' : (d.sudden ? '1 滴血' : '伤害 ×' + d.dmg.toFixed(1)), x + bw / 2, y + 31);
+      ctx.fillText(locked ? difficultyUnlockShort(key) : (d.sudden ? '1 滴血' : '伤害 ×' + d.dmg.toFixed(1)), x + bw / 2, y + 31);
       G.uiButtons.push({
         x, y, w: bw, h: 40,
-        action: locked ? () => notifyMenu('通关一次困难模式后解锁「突然死亡」', 4000) : () => setDifficulty(key),
+        action: locked ? () => notifyMenu(difficultyUnlockHint(key), 4000) : () => setDifficulty(key),
       });
       x += bw + gap;
     }
@@ -3889,10 +3927,10 @@
     ctx.font = '12px ' + FONT;
     ctx.fillStyle = 'rgba(150,175,210,0.6)';
     ctx.fillText('R 再来一局 · Esc 返回大厅', W / 2, 622);
-    if (won && G.justUnlocked) {
+    if (won && G.unlockText) {
       ctx.font = 'bold 14px ' + FONT;
       ctx.fillStyle = '#ff8a8a';
-      ctx.fillText('已解锁：突然死亡模式（只有 1 滴血）', W / 2, 650);
+      ctx.fillText(G.unlockText, W / 2, 650);
     }
   }
 
