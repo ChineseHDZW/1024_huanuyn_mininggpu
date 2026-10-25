@@ -410,7 +410,7 @@
       enemies: {
         worm: { hp: 16, dmg: 12, gold: 5 },
         trojan: { hp: 11, speed: 175, dmg: 6, gold: 4 },
-        leak: { hp: 45, dmg: 20, gold: 7 },
+        leak: { hp: 40, dmg: 20, gold: 7 },
       },
       spawnTiers: [
         { from: 2, trojan: 0.20, leak: 0 },
